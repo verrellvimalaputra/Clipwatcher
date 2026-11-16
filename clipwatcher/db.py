@@ -42,6 +42,13 @@ CREATE TABLE IF NOT EXISTS posts (
     UNIQUE(clip_id, platform)
 );
 CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS ai_usage (           -- Claude Code calls per local day and task
+    day TEXT NOT NULL, task TEXT NOT NULL, model TEXT NOT NULL DEFAULT '',
+    calls INTEGER NOT NULL DEFAULT 0, failed INTEGER NOT NULL DEFAULT 0,
+    input INTEGER NOT NULL DEFAULT 0, cached INTEGER NOT NULL DEFAULT 0, output INTEGER NOT NULL DEFAULT 0,
+    cost REAL NOT NULL DEFAULT 0,               -- what it would cost at API prices (you're not billed this)
+    PRIMARY KEY (day, task, model)
+);
 CREATE TABLE IF NOT EXISTS jobs (                -- video imports (YouTube link or upload)
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     kind TEXT NOT NULL,                  -- url | upload
@@ -65,7 +72,8 @@ DEFAULT_SETTINGS = {
     "tiktok_mode": "inbox",     # inbox (draft, you tap Post in the app) | direct
     "tiktok_privacy": "SELF_ONLY",
     "keep_recordings_hours": 48,
-    "context_overlay": True,    # show each clip's context line on the video for the first seconds
+    "context_overlay": True,
+    "ai_review": True,          # a second Claude pass scores each clip 0-10 (interesting, funny, clear)    # show each clip's context line on the video for the first seconds
     "import_layout": "auto",    # default layout for imported videos (talking heads, podcasts)
     "ytdlp_cookies": "",        # path to a cookies.txt if YouTube asks to "confirm you're not a bot"
     "public_url": "",           # https://studio.example.com, needed for Instagram + OAuth redirects
@@ -91,7 +99,8 @@ class DB:
                 self.x(f"ALTER TABLE channels ADD COLUMN {col} {ddl}")
         have = {r["name"] for r in self.q("PRAGMA table_info(clips)")}
         for col, ddl in [("source_kind", "TEXT NOT NULL DEFAULT 'twitch'"), ("source_url", "TEXT"),
-                         ("job_id", "INTEGER"), ("why", "TEXT"), ("layout", "TEXT"), ("facecam", "TEXT"), ("context", "TEXT")]:
+                         ("job_id", "INTEGER"), ("why", "TEXT"), ("layout", "TEXT"), ("facecam", "TEXT"), ("context", "TEXT"),
+                         ("ai_score", "REAL"), ("ai_review", "TEXT"), ("ai_tries", "INTEGER NOT NULL DEFAULT 0")]:
             if col not in have:
                 self.x(f"ALTER TABLE clips ADD COLUMN {col} {ddl}")
 
@@ -166,6 +175,26 @@ class DB:
              "heat": json.dumps(c.get("heat")),
              "facecam": json.dumps(c["facecam"]) if c.get("facecam") else None})
 
+    def add_usage(self, task: str, out: dict):
+        """Record one `claude -p --output-format json` result."""
+        import time as _t
+        u = out.get("usage") or {}
+        models = list((out.get("modelUsage") or {}).keys())
+        fresh = int(u.get("input_tokens") or 0) + int(u.get("cache_creation_input_tokens") or 0)
+        self.x("""INSERT INTO ai_usage(day, task, model, calls, failed, input, cached, output, cost)
+                  VALUES(?,?,?,1,?,?,?,?,?)
+                  ON CONFLICT(day, task, model) DO UPDATE SET calls=calls+1, failed=failed+excluded.failed,
+                  input=input+excluded.input, cached=cached+excluded.cached, output=output+excluded.output,
+                  cost=cost+excluded.cost""",
+               (_t.strftime("%Y-%m-%d"), task, ",".join(sorted(models)), 1 if out.get("is_error") else 0, fresh,
+                int(u.get("cache_read_input_tokens") or 0), int(u.get("output_tokens") or 0),
+                float(out.get("total_cost_usd") or 0)))
+
+    def usage(self, days: int = 7) -> list[dict]:
+        import time as _t
+        since = _t.strftime("%Y-%m-%d", _t.localtime(_t.time() - (days - 1) * 86400))
+        return self.q("SELECT * FROM ai_usage WHERE day>=? ORDER BY day DESC, task", (since,))
+
     def clip(self, cid: int) -> dict | None:
         r = self.q("SELECT * FROM clips WHERE id=?", (cid,))
         if not r:
@@ -175,6 +204,7 @@ class DB:
         c["captions"] = json.loads(c["captions"] or "[]")
         c["heat"] = json.loads(c["heat"] or "null")
         c["facecam"] = json.loads(c["facecam"] or "null")
+        c["ai_review"] = json.loads(c["ai_review"] or "null")
         c["channel_facecam"] = self.get(f"facecam:{c['channel']}")
         c["posts"] = self.q("SELECT * FROM posts WHERE clip_id=? ORDER BY platform", (cid,))
         return c

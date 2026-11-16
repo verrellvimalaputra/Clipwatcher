@@ -55,6 +55,19 @@ Without Docker: Python 3.10+, ffmpeg with libass, then
   plus the chat reaction. This runs through **Claude Code on your Claude
   subscription** (Pro/Max), not the paid API. See below.
 
+## AI review score
+
+With Claude Code set up, every clip waiting for review gets a second opinion: a
+separate Claude pass watches only the final cut (what's said, the title, the
+text on the video and chat) and scores it 0–10 for how interesting, funny and
+easy to follow it is for someone who never saw the stream, with a one-line
+reason and a tip. It also looks at 6 stills from the clip, so it catches visual
+moments (crashes, fails) that nobody talks over. It runs on Claude Haiku to
+keep usage low; set `CLAUDE_REVIEW_MODEL=sonnet` in `.env` for a stricter judge.
+Settings → Claude Code shows how many calls and tokens the studio used today.
+Sort the queue by **Best AI score first**. Trimming a clip
+scores it again. Turn it off in Settings → Clips.
+
 ## Importing videos
 
 Open **Import a video**, paste a link, pick clip length / count / layout and

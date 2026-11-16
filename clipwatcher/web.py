@@ -9,7 +9,6 @@ import re
 import secrets
 import shutil
 import subprocess
-import tempfile
 import threading
 import time
 from pathlib import Path
@@ -21,6 +20,8 @@ from .clipper import ClipConfig, duration_of, render, thumbnail
 from .channels import parse_channel
 from .db import DB
 from .importer import ImportWorker
+from . import moments as moments_mod
+from .reviewer import ReviewWorker, review_model
 from .moments import CLAUDE_STATUS, claude_available, claude_check
 from .publishers import PostWorker, new_state, platforms, public_token
 from .supervisor import Supervisor, render_caption
@@ -44,6 +45,8 @@ def create_app(data: Path) -> FastAPI:
     sup = Supervisor(data, db)
     poster = PostWorker(db, clips_dir, public_base, secret)
     importer = ImportWorker(db, data)
+    reviewer = ReviewWorker(db, clips_dir)
+    moments_mod.USAGE_HOOK = db.add_usage  # count every Claude Code call the studio makes
     app = FastAPI(title="clipwatcher studio", docs_url=None, redoc_url=None)
 
     @app.on_event("startup")
@@ -52,6 +55,8 @@ def create_app(data: Path) -> FastAPI:
         sup.start_housekeeping()
         poster.start()
         importer.start()
+        reviewer.start()
+        reviewer.poke()
 
     @app.on_event("shutdown")
     def _stop():
@@ -159,9 +164,10 @@ def create_app(data: Path) -> FastAPI:
 
     # ---------------------------------------------------------------- clips
     @app.get("/api/clips")
-    def list_clips(status: str = "pending", channel: str = "", job: int = 0, limit: int = 200):
+    def list_clips(status: str = "pending", channel: str = "", job: int = 0, limit: int = 200, sort: str = "new"):
+        reviewer.poke()  # new clips get their AI score soon after the queue is looked at
         sql = ("SELECT id, channel, created, file, thumb, duration, score, baseline, reason, title, status, "
-               "source_kind, job_id FROM clips WHERE status=?")
+               "source_kind, job_id, ai_score FROM clips WHERE status=?")
         args: list = [status]
         if channel:
             sql += " AND channel=? AND source_kind!='video'"
@@ -169,7 +175,8 @@ def create_app(data: Path) -> FastAPI:
         if job:
             sql += " AND job_id=?"
             args.append(job)
-        sql += " ORDER BY created DESC LIMIT ?"
+        sql += (" ORDER BY ai_score IS NULL, ai_score DESC, created DESC" if sort == "score"
+                else " ORDER BY created DESC") + " LIMIT ?"
         rows = db.q(sql, args + [limit])
         if rows:
             ids = ",".join(str(r["id"]) for r in rows)
@@ -255,9 +262,33 @@ def create_app(data: Path) -> FastAPI:
         db.x("UPDATE clips SET file=?, duration=?, trim_start=?, trim_end=?, layout=?, facecam=? WHERE id=?",
              (new_name, duration_of(clips_dir / new_name), start, end, used,
               json.dumps(cfg.facecam) if cfg.facecam else None, cid))
+        if (start, end) != (c.get("trim_start"), c.get("trim_end")):  # different cut: score it again
+            db.x("UPDATE clips SET ai_score=NULL, ai_review=NULL, ai_tries=0 WHERE id=?", (cid,))
+            reviewer.poke()
         if old != new_name:
             (clips_dir / old).unlink(missing_ok=True)
         return get_clip(cid)
+
+    @app.get("/api/ai-usage")
+    def ai_usage(days: int = 7):
+        rows = db.usage(max(1, min(days, 90)))
+        today = time.strftime("%Y-%m-%d")
+        tot = lambda rs: {k: sum(r[k] for r in rs) for k in ("calls", "failed", "input", "cached", "output", "cost")}
+        by_task: dict = {}
+        for r in rows:
+            if r["day"] == today:
+                t = by_task.setdefault(r["task"], {"calls": 0, "input": 0, "cached": 0, "output": 0, "cost": 0.0})
+                for k in t:
+                    t[k] += r[k]
+        return {"today": tot([r for r in rows if r["day"] == today]), "today_by_task": by_task,
+                "week": tot(rows), "days": days, "review_model": review_model()}
+
+    @app.post("/api/clips/{cid}/ai-review")
+    def ai_review_again(cid: int):
+        get_clip(cid)
+        db.x("UPDATE clips SET ai_score=NULL, ai_review=NULL, ai_tries=0 WHERE id=?", (cid,))
+        reviewer.poke()
+        return {"ok": True}
 
     @app.post("/api/clips/{cid}/render")
     def rerender(cid: int, body: dict = Body(...)):
@@ -354,22 +385,13 @@ def create_app(data: Path) -> FastAPI:
             "Chat reacting at that moment:\n" + "\n".join(c["chat_sample"][-8:]) +
             "\n\nWrite 3 different title options: hooky, max 70 characters, same language as the "
             "streamer, no clickbait lies, no hashtags. Reply with JSON only: {\"titles\": [..3 strings..]}")
-        env = {k: v for k, v in os.environ.items() if k != "ANTHROPIC_API_KEY"}  # never fall back to API billing
-        with tempfile.TemporaryDirectory() as td:  # empty cwd: no project files or CLAUDE.md get loaded
-            try:
-                r = subprocess.run(
-                    ["claude", "-p", prompt, "--output-format", "json", "--tools", "",
-                     "--model", os.environ.get("CLAUDE_MODEL", "sonnet")],
-                    capture_output=True, text=True, timeout=120, cwd=td, env=env)
-            except subprocess.TimeoutExpired:
-                raise HTTPException(504, "Claude Code took too long, try again")
         try:
-            out = json.loads(r.stdout)
-        except ValueError:
-            out = {"is_error": True, "result": (r.stderr or r.stdout).strip()[:300]}
-        if r.returncode != 0 or out.get("is_error"):
-            raise HTTPException(502, f"Claude Code: {str(out.get('result') or r.stderr)[:300]}")
-        m = re.search(r"\{.*\}", out.get("result", ""), re.S)
+            text = moments_mod.run_claude(prompt, "", timeout=120, task="titles")
+        except subprocess.TimeoutExpired:
+            raise HTTPException(504, "Claude Code took too long, try again")
+        except RuntimeError as e:
+            raise HTTPException(502, f"Claude Code: {e}")
+        m = re.search(r"\{.*\}", text, re.S)
         try:
             titles = json.loads(m.group(0))["titles"] if m else []
         except (ValueError, KeyError):

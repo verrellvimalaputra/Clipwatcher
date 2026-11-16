@@ -198,7 +198,7 @@ def claude_check() -> dict:
         _claude_failed("No login: set CLAUDE_CODE_OAUTH_TOKEN in .env (output of `claude setup-token`)")
     else:
         try:
-            out = run_claude("Reply with exactly: OK", "", timeout=90)
+            out = run_claude("Reply with exactly: OK", "", timeout=90, task="check")
             CLAUDE_STATUS.update(ok=True, message=f"Connected (replied {out.strip()[:20]!r})", at=_t.time())
         except Exception as e:  # run_claude records most failures; timeouts etc. land here
             if CLAUDE_STATUS["ok"] is not False:
@@ -211,20 +211,37 @@ def claude_check() -> dict:
     return {**CLAUDE_STATUS, "hint": hint}
 
 
-def run_claude(instructions: str, stdin_text: str, timeout: int = 900) -> str:
+USAGE_HOOK = None  # set by the studio: called as USAGE_HOOK(task, result_json) after every call
+
+
+def run_claude(instructions: str, stdin_text: str, timeout: int = 900, *, task: str = "other",
+               model: str | None = None, files: dict | None = None) -> str:
     """claude -p on the subscription: ANTHROPIC_API_KEY is stripped so it can never
-    bill the API, tools are off, and it runs in an empty dir (no CLAUDE.md)."""
+    bill the API, and it runs in an empty dir (no CLAUDE.md). Tools are off, except
+    when `files` ({name: Path}) are given: then they're copied into that dir and only
+    reading exactly those files is allowed (that's how the reviewer sees frames)."""
     env = {k: v for k, v in os.environ.items() if k != "ANTHROPIC_API_KEY"}
+    cmd = ["claude", "-p", instructions, "--output-format", "json",
+           "--model", model or os.environ.get("CLAUDE_MODEL", "sonnet")]
     with tempfile.TemporaryDirectory() as td:
-        r = subprocess.run(["claude", "-p", instructions, "--output-format", "json", "--tools", "",
-                            "--model", os.environ.get("CLAUDE_MODEL", "sonnet")],
-                           input=stdin_text, capture_output=True, text=True, timeout=timeout, cwd=td, env=env)
+        if files:
+            for name, src in files.items():
+                shutil.copyfile(src, Path(td) / name)
+            cmd += ["--tools", "Read", "--allowedTools", ",".join(f"Read(./{n})" for n in files), "--max-turns", "4"]
+        else:
+            cmd += ["--tools", ""]
+        r = subprocess.run(cmd, input=stdin_text, capture_output=True, text=True, timeout=timeout, cwd=td, env=env)
     try:
         out = json.loads(r.stdout)
     except ValueError:
         msg = (r.stderr or r.stdout).strip()[:300] or "no output from Claude Code"
         _claude_failed(msg)
         raise RuntimeError(msg)
+    if USAGE_HOOK:
+        try:
+            USAGE_HOOK(task, out)
+        except Exception:  # counting must never break the actual work
+            log.exception("usage hook failed")
     if r.returncode != 0 or out.get("is_error"):
         msg = str(out.get("result") or r.stderr)[:300]
         _claude_failed(msg)
@@ -271,7 +288,7 @@ def claude_moments(info: dict, segments: list[list], signals: dict, length: str,
         f"Reply with ONLY JSON: {{\"clips\": [{{\"start\": <seconds>, \"end\": <seconds>, \"title\": \"...\", "
         f"\"context\": \"...\", \"why\": \"one sentence on why this will hold attention\", "
         f"\"score\": <0-100 virality>}}]}}")
-    text = run_claude(instructions, body)
+    text = run_claude(instructions, body, task="moments")
     m = re.search(r"\{.*\}", text, re.S)
     if not m:
         raise RuntimeError("Claude Code didn't return JSON")
@@ -384,7 +401,7 @@ def twitch_cut(words: list[list], segments: list[list], chat: list[tuple[float, 
             "context line (max 60 characters) shown on screen for the first seconds that sets up what's going on "
             "without spoiling the payoff. Reply with ONLY JSON: "
             '{"start": <seconds>, "end": <seconds>, "title": "...", "context": "..."}')
-        text = run_claude(instructions, body, timeout=240)
+        text = run_claude(instructions, body, timeout=240, task="cut")
         m = re.search(r"\{.*\}", text, re.S)
         c = json.loads(m.group(0)) if m else {}
         s, e = float(c["start"]), float(c["end"])
