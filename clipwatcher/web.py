@@ -383,8 +383,9 @@ def create_app(data: Path) -> FastAPI:
             "You write titles for short-form clips (YouTube Shorts, Reels, TikTok) cut from Twitch streams.\n"
             f"Streamer: {c['channel']}\nWhat the streamer says in the clip: {c['transcript'] or '(no speech)'}\n"
             "Chat reacting at that moment:\n" + "\n".join(c["chat_sample"][-8:]) +
-            "\n\nWrite 3 different title options: hooky, max 70 characters, same language as the "
-            "streamer, no clickbait lies, no hashtags. Reply with JSON only: {\"titles\": [..3 strings..]}")
+            "\n\nWrite 3 different title options in the streamer's language, following the style guide "
+            "below (TITLE part). Make the three use different patterns. Reply with JSON only: "
+            "{\"titles\": [..3 strings..]}" + moments_mod.copy_style())
         try:
             text = moments_mod.run_claude(prompt, "", timeout=120, task="titles")
         except subprocess.TimeoutExpired:

@@ -109,3 +109,23 @@ Known rough edges / ideas:
 - - Whisper on CPU is slow (`small` ran ~0.75× realtime on the owner's laptop in Docker), hence the two-stage design: never run the big model over a whole video. Whisper uses `cpu_threads=os.cpu_count()`.
 - yt-dlp breaks whenever YouTube changes things: `pip install -U "yt-dlp[default]"` is the usual fix.
 - Possible next features: pick-best-clips ranking with Claude Code, scheduled posting times, per-platform caption overrides.
+
+## Writing style for clip text (titles, context line)
+
+The text Claude writes for clips (the context line burned into the first seconds, the
+title, title suggestions) must sound like a clip-channel fan account, not a news
+headline: short, casual, present tense, streamer name + situation, at most one emoji,
+no spoilers, no lies. The owner found the old output stiff ("kaku").
+
+- **Single source of truth:** `clipwatcher/prompts/copy_style.md`. It has the rules,
+  the patterns ("Als …", reaction, stakes, chat callout, POV) and stiff → good
+  examples in German and Indonesian. Change the tone there, not in Python.
+- Every prompt that writes clip text appends `moments.copy_style()`
+  (`claude_moments`, `twitch_cut`, the `/suggest` endpoint). Any new prompt that
+  writes titles, context lines or captions must do the same. The file is read on
+  every call, so edits apply to new clips without a restart.
+- The app's own `claude -p` calls run with tools off in an empty dir, so they can't
+  use skills or this file; the guide has to be in the prompt text.
+- Focus market: German-language GTA 6 streamers (higher RPM, owner lives in DE);
+  Indonesian is secondary. Keep examples for both.
+- Test: `tests/test_moments.py::test_text_prompts_include_the_style_guide`.

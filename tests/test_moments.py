@@ -87,3 +87,16 @@ def test_twitch_cut_takes_good_claude_cut(monkeypatch):
     cut = moments.twitch_cut(words, segs, [], spike=80.0, duration=110.0, channel="x")
     assert cut["how"] == "claude" and cut["title"] == "He thought he won" and cut["context"] == "Last 1v1"
     assert 47 < cut["start"] < 54 and 84 < cut["end"] < 90
+
+
+def test_text_prompts_include_the_style_guide(monkeypatch):
+    from clipwatcher import moments
+    style = moments.copy_style()
+    assert "CONTEXT LINE" in style and "TITLE" in style
+    seen = []
+    monkeypatch.setattr(moments, "claude_available", lambda: True)
+    monkeypatch.setattr(moments, "run_claude", lambda instr, body, **k: seen.append(instr) or '{"start": 1, "end": 20, "title": "t", "context": "c"}')
+    segs = [[i * 3.0, i * 3.0 + 2.8, f"Satz {i}."] for i in range(40)]
+    words = [[a + j * 0.5, a + j * 0.5 + 0.4, f"w{j}"] for a, b, _ in segs for j in range(5)]
+    moments.twitch_cut(words, segs, [], 60.0, 120.0, "papaplatte")
+    assert seen and "CONTEXT LINE" in seen[0]

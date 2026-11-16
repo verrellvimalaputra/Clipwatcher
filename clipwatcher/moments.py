@@ -211,6 +211,18 @@ def claude_check() -> dict:
     return {**CLAUDE_STATUS, "hint": hint}
 
 
+STYLE_FILE = Path(__file__).parent / "prompts" / "copy_style.md"
+
+
+def copy_style() -> str:
+    """The tone guide for titles and the on-screen context line. Read on every call,
+    so editing the file changes new clips without a restart."""
+    try:
+        return "\n\n" + STYLE_FILE.read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+
+
 USAGE_HOOK = None  # set by the studio: called as USAGE_HOOK(task, result_json) after every call
 
 
@@ -281,13 +293,11 @@ def claude_moments(info: dict, segments: list[list], signals: dict, length: str,
         f"'so', 'anyway', 'yeah'. It must END on a payoff or punchline, not mid-thought. No overlapping clips. "
         f"Prefer moments the signals point to, but only if the transcript there is actually good. Skip intros, "
         f"sponsor reads and outros.\n"
-        f"Titles: max 70 characters, same language as the video, curiosity-driven but true, no hashtags.\n"
-        f"Context: one short line (max 60 characters, same language) shown on screen for the first seconds, "
-        f"telling a viewer who never saw the video what's going on, e.g. who is talking or what's at stake. "
-        f"Don't repeat the title or spoil the payoff.\n"
+        f"For each clip write a title and a context line (shown on screen for the first seconds) in the "
+        f"video's language, following the style guide below.\n"
         f"Reply with ONLY JSON: {{\"clips\": [{{\"start\": <seconds>, \"end\": <seconds>, \"title\": \"...\", "
         f"\"context\": \"...\", \"why\": \"one sentence on why this will hold attention\", "
-        f"\"score\": <0-100 virality>}}]}}")
+        f"\"score\": <0-100 virality>}}]}}" + copy_style())
     text = run_claude(instructions, body, task="moments")
     m = re.search(r"\{.*\}", text, re.S)
     if not m:
@@ -397,10 +407,9 @@ def twitch_cut(words: list[list], segments: list[list], chat: list[tuple[float, 
             "viewer who never watched the stream understands it: START where the situation that leads to the "
             "moment begins (not in the middle of a sentence, and not with long unrelated talk before it), END "
             "right after the payoff/reaction. 15-60 seconds; it must include the moment just before the chat "
-            "spike. Then write, in the stream's language: a title (max 70 characters, true, no hashtags) and a "
-            "context line (max 60 characters) shown on screen for the first seconds that sets up what's going on "
-            "without spoiling the payoff. Reply with ONLY JSON: "
-            '{"start": <seconds>, "end": <seconds>, "title": "...", "context": "..."}')
+            "spike. Then write, in the stream's language, a title and a context line (shown on screen for the "
+            "first seconds), following the style guide below. Reply with ONLY JSON: "
+            '{"start": <seconds>, "end": <seconds>, "title": "...", "context": "..."}' + copy_style())
         text = run_claude(instructions, body, timeout=240, task="cut")
         m = re.search(r"\{.*\}", text, re.S)
         c = json.loads(m.group(0)) if m else {}

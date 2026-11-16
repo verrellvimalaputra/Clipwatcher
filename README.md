@@ -55,6 +55,13 @@ Without Docker: Python 3.10+, ffmpeg with libass, then
   plus the chat reaction. This runs through **Claude Code on your Claude
   subscription** (Pro/Max), not the paid API. See below.
 
+## Tone of titles and on-screen text
+
+Claude writes titles and the context line in a casual clip-channel style (short,
+streamer name + situation, one emoji at most). The rules and examples live in
+`clipwatcher/prompts/copy_style.md`: edit that file to change the tone. New clips
+pick it up right away, no rebuild needed if you mount the code, otherwise rebuild.
+
 ## AI review score
 
 With Claude Code set up, every clip waiting for review gets a second opinion: a
