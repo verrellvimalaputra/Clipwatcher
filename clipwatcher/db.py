@@ -65,6 +65,7 @@ DEFAULT_SETTINGS = {
     "tiktok_mode": "inbox",     # inbox (draft, you tap Post in the app) | direct
     "tiktok_privacy": "SELF_ONLY",
     "keep_recordings_hours": 48,
+    "context_overlay": True,    # show each clip's context line on the video for the first seconds
     "import_layout": "auto",    # default layout for imported videos (talking heads, podcasts)
     "ytdlp_cookies": "",        # path to a cookies.txt if YouTube asks to "confirm you're not a bot"
     "public_url": "",           # https://studio.example.com, needed for Instagram + OAuth redirects
@@ -82,9 +83,15 @@ class DB:
 
     def _migrate(self):
         """Add columns introduced after a DB was first created."""
+        if "mode" not in {r["name"] for r in self.q("PRAGMA table_info(jobs)")}:
+            self.x("ALTER TABLE jobs ADD COLUMN mode TEXT")
+        have_ch = {r["name"] for r in self.q("PRAGMA table_info(channels)")}
+        for col, ddl in [("platform", "TEXT NOT NULL DEFAULT 'twitch'"), ("url", "TEXT"), ("label", "TEXT")]:
+            if col not in have_ch:
+                self.x(f"ALTER TABLE channels ADD COLUMN {col} {ddl}")
         have = {r["name"] for r in self.q("PRAGMA table_info(clips)")}
         for col, ddl in [("source_kind", "TEXT NOT NULL DEFAULT 'twitch'"), ("source_url", "TEXT"),
-                         ("job_id", "INTEGER"), ("why", "TEXT"), ("layout", "TEXT"), ("facecam", "TEXT")]:
+                         ("job_id", "INTEGER"), ("why", "TEXT"), ("layout", "TEXT"), ("facecam", "TEXT"), ("context", "TEXT")]:
             if col not in have:
                 self.x(f"ALTER TABLE clips ADD COLUMN {col} {ddl}")
 
@@ -135,19 +142,25 @@ class DB:
     def channels(self) -> list[dict]:
         return self.q("SELECT * FROM channels ORDER BY added")
 
-    def add_channel(self, name: str) -> None:
-        self.x("INSERT OR IGNORE INTO channels(name, added) VALUES(?,?)", (name, time.time()))
+    def add_channel(self, name: str, platform: str = "twitch", url: str | None = None,
+                    label: str | None = None) -> None:
+        self.x("INSERT OR IGNORE INTO channels(name, added, platform, url, label) VALUES(?,?,?,?,?)",
+               (name, time.time(), platform, url, label))
+
+    def channel(self, name: str) -> dict | None:
+        r = self.q("SELECT * FROM channels WHERE name=?", (name,))
+        return r[0] if r else None
 
     # ---- clips ----
     def add_clip(self, c: dict) -> int:
         return self.x(
             """INSERT INTO clips(channel, created, file, src, captions, thumb, duration, score, baseline,
                reason, chat_sample, heat, transcript, title, caption, source_kind, source_url, job_id, why,
-               layout, trim_start, trim_end, facecam)
+               layout, trim_start, trim_end, facecam, context)
                VALUES(:channel,:created,:file,:src,:captions,:thumb,:duration,:score,:baseline,:reason,
                :chat_sample,:heat,:transcript,:title,:caption,:source_kind,:source_url,:job_id,:why,
-               :layout,:trim_start,:trim_end,:facecam)""",
-            {"source_kind": "twitch", "source_url": None, "job_id": None, "why": None, "layout": None,
+               :layout,:trim_start,:trim_end,:facecam,:context)""",
+            {"source_kind": "twitch", "source_url": None, "job_id": None, "why": None, "layout": None, "context": None,
              "trim_start": 0.0, "trim_end": None, **c, "chat_sample": json.dumps(c.get("chat_sample", []), ensure_ascii=False),
              "captions": json.dumps(c.get("captions", []), ensure_ascii=False),
              "heat": json.dumps(c.get("heat")),

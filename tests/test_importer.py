@@ -35,3 +35,28 @@ def test_pick_track_prefers_spoken_language_never_translation():
     assert pick_caption_track({"automatic_captions": {"de-orig": [], "en": []}}) == ("de-orig", True)
     assert pick_caption_track({"automatic_captions": {"en": [], "de": []}}) is None
     assert pick_caption_track({"automatic_captions": {"en": []}}, language="en") == ("en", True)
+
+
+def test_download_mode_auto_uses_clips_for_long_videos():
+    from clipwatcher.importer import download_mode
+    url = {"kind": "url"}
+    assert download_mode(url, {}, {"duration": 3 * 3600}) == "clips"
+    assert download_mode(url, {}, {"duration": 8 * 60}) == "full"
+    assert download_mode(url, {"download": "full"}, {"duration": 3 * 3600}) == "full"
+    assert download_mode(url, {"download": "clips"}, {"duration": 60}) == "clips"
+    assert download_mode({"kind": "upload"}, {"download": "clips"}, {"duration": 9999}) == "full"
+
+
+def test_chat_heat_from_replay(tmp_path):
+    import json
+    from clipwatcher.importer import chat_msgs_heat
+    lines = []
+    for i, t in enumerate([100.5, 101.0, 101.2, 104.0, 130.0]):
+        lines.append(json.dumps({"replayChatItemAction": {"videoOffsetTimeMsec": str(int(t * 1000)), "actions": [
+            {"addChatItemAction": {"item": {"liveChatTextMessageRenderer": {
+                "message": {"runs": [{"text": "lol"}]}, "authorName": {"simpleText": f"u{i}"}}}}}]}}))
+    (tmp_path / "source.live_chat.json").write_text("\n".join(lines))
+    pts = chat_msgs_heat(tmp_path, 100.0, 110.0)
+    assert pts[0] == [0.0, 10.0]          # 3 messages in the first 2 s = the peak
+    assert pts[2][1] == round(1 / 3 * 10, 2)
+    assert chat_msgs_heat(tmp_path, 200.0, 210.0) == []

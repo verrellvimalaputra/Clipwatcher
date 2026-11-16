@@ -65,3 +65,12 @@ def test_cam_border_prefers_line_with_busy_outside():
     inside = lambda i: busy(i - 5)                 # noqa: E731
     outside = lambda i: busy(i + 5)                # noqa: E731
     assert _cam_border(prof, inside, outside, 10, 90) == 60
+
+
+def test_context_banner_only_at_the_start(tmp_path):
+    n = write_ass([], tmp_path / "c.ass", offset=10, width=1080, height=1920, end=40,
+                  context="Mande thinks he already won", context_secs=3.5)
+    text = (tmp_path / "c.ass").read_text()
+    assert n == 1
+    assert "Style: Context" in text
+    assert "Dialogue: 1,0:00:00.00,0:00:03.50,Context" in text and "Mande thinks he already won" in text

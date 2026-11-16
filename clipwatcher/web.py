@@ -18,15 +18,15 @@ from fastapi import Body, FastAPI, File, Form, HTTPException, Request, UploadFil
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
 
 from .clipper import ClipConfig, duration_of, render, thumbnail
+from .channels import parse_channel
 from .db import DB
 from .importer import ImportWorker
-from .moments import claude_available
+from .moments import CLAUDE_STATUS, claude_available, claude_check
 from .publishers import PostWorker, new_state, platforms, public_token
 from .supervisor import Supervisor, render_caption
 
 log = logging.getLogger("studio")
 STATIC = Path(__file__).parent / "static"
-CHANNEL_RE = re.compile(r"^[a-z0-9_]{3,25}$")
 
 
 def create_app(data: Path) -> FastAPI:
@@ -121,19 +121,19 @@ def create_app(data: Path) -> FastAPI:
         return {"channels": chans, "totals": totals, "posting": posting, "failed_posts": failed,
                 "importing": importing, "rerendering": rer,
                 "platforms": [p.info() for p in platforms(db).values()],
-                "claude": claude_available(),
+                "claude": claude_available(), "claude_status": CLAUDE_STATUS,
                 "demo": os.environ.get("CLIPWATCHER_DEMO") == "1"}
 
     # ---------------------------------------------------------------- channels
     @app.post("/api/channels")
     def add_channel(body: dict = Body(...)):
-        name = str(body.get("name", "")).strip().lower()
-        name = re.sub(r"^(https?://)?(www\.)?twitch\.tv/", "", name).strip("/@ ")
-        if not CHANNEL_RE.match(name):
-            raise HTTPException(400, "That doesn't look like a Twitch channel name")
-        db.add_channel(name)
+        try:
+            ch = parse_channel(str(body.get("name", "")))
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        db.add_channel(ch["name"], ch["platform"], ch["url"], ch["label"])
         sup.sync()
-        return {"ok": True, "name": name}
+        return {"ok": True, **ch}
 
     @app.patch("/api/channels/{name}")
     def edit_channel(name: str, body: dict = Body(...)):
@@ -164,7 +164,7 @@ def create_app(data: Path) -> FastAPI:
                "source_kind, job_id FROM clips WHERE status=?")
         args: list = [status]
         if channel:
-            sql += " AND channel=? AND source_kind='twitch'"
+            sql += " AND channel=? AND source_kind!='video'"
             args.append(channel)
         if job:
             sql += " AND job_id=?"
@@ -247,6 +247,7 @@ def create_app(data: Path) -> FastAPI:
         cfg.layout = layout if layout in LAYOUTS else (c.get("layout") or cfg.layout)
         # facecam: explicit box > this clip's box > the channel's saved box > detect again
         cfg.facecam = None if redetect else (facecam or c.get("facecam") or c.get("channel_facecam"))
+        cfg.context = (c.get("context") or None) if db.settings().get("context_overlay", True) else None
         new_name = f"{Path(c['file']).stem.split('.v')[0]}.v{int(time.time())}.mp4"
         used = render(clips_dir / c["src"], clips_dir / new_name, cfg, c["captions"], start, end)
         thumbnail(clips_dir / new_name, clips_dir / c["thumb"])
@@ -274,6 +275,9 @@ def create_app(data: Path) -> FastAPI:
             raise HTTPException(400, "That facecam area is too small")
         if box and body.get("save_for_channel"):
             db.put(f"facecam:{c['channel']}", box)
+        if "context" in body:
+            db.x("UPDATE clips SET context=? WHERE id=?", ((str(body["context"]).strip()[:140] or None), cid))
+            c = get_clip(cid)
         return do_render(c, start, end, body.get("layout"), box, bool(body.get("redetect")))
 
     @app.get("/api/clips/{cid}/frame")
@@ -323,9 +327,10 @@ def create_app(data: Path) -> FastAPI:
         if layout not in LAYOUTS:
             raise HTTPException(400, "Unknown layout")
         status = body.get("status", "pending")
+        live = body.get("source_kind", "twitch") != "video"  # "twitch" = every live source (Twitch + YouTube Live)
         ids = [r["id"] for r in db.q("SELECT id FROM clips WHERE status=? AND (layout IS NULL OR layout!=?) "
-                                     "AND source_kind=? ORDER BY created DESC",
-                                     (status, layout, body.get("source_kind", "twitch")))]
+                                     f"AND source_kind{'!=' if live else '='}'video' ORDER BY created DESC",
+                                     (status, layout))]
         with bulk_lock:
             if not bulk["queue"]:  # previous batch finished: start counting fresh
                 bulk.update(done=0, total=0, failed=0)
@@ -383,7 +388,8 @@ def create_app(data: Path) -> FastAPI:
                 "count": str(body.get("count", "auto")),
                 "layout": body.get("layout") if body.get("layout") in ("split", "auto", "fit", "crop", "original") else None,
                 "language": str(body.get("language") or "").strip()[:8] or None,
-                "ai": bool(body.get("ai", True)), "chat": bool(body.get("chat", True))}
+                "ai": bool(body.get("ai", True)), "chat": bool(body.get("chat", True)),
+                "download": body.get("download") if body.get("download") in ("auto", "full", "clips") else "auto"}
 
     @app.get("/api/imports")
     def list_imports():
@@ -439,6 +445,10 @@ def create_app(data: Path) -> FastAPI:
         return {"ok": True}
 
     # ---------------------------------------------------------------- settings
+    @app.post("/api/claude/check")
+    def check_claude():
+        return claude_check()
+
     @app.get("/api/settings")
     def get_settings():
         return db.settings()

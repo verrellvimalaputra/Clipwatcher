@@ -57,3 +57,30 @@ def test_cooldown_blocks_double_clip():
     det = SpikeDetector()
     det.cfg.cooldown = 10_000
     assert len(run(msgs, det)) == 1
+
+
+def test_reaction_wave_in_a_chat_that_is_always_busy():
+    """Big streams: ~45 people chat every 10 s no matter what, so volume never
+    triples. A wave of 'gg' (match ended) must still trigger; a roll call
+    ('aku' spam) must not."""
+    random.seed(4)
+    t0, msgs = 1_700_000_000, []
+    users = [f"u{i}" for i in range(5000)]
+    chatter = ["halo bang", "bang baca chat", "lanjut bang", "mantap kontennya", "sapa dong", "kapan main lagi"]
+    for s in range(900):
+        t = t0 + s
+        n = 5  # constant volume
+        for _ in range(n):
+            u = random.choice(users)
+            if 500 <= s < 530:           # match ends: most messages become reactions
+                text = random.choice(["gg", "GG", "gg bang", "ggwp", "wkwkwk"])
+            elif 700 <= s < 760:         # roll call: same volume, everyone types "aku"
+                text = random.choice(["aku", "akuu", "akuuu"])
+            else:
+                text = random.choice(chatter) if random.random() > 0.15 else "wkwk"
+            msgs.append((t + random.random(), u, text))
+    msgs.sort()
+    spikes = run(msgs, SpikeDetector())
+    offsets = [round(s.t - t0) for s in spikes]
+    assert len(spikes) == 1, offsets
+    assert spikes[0].reason == "reactions" and 500 <= offsets[0] <= 535

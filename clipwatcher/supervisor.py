@@ -10,7 +10,9 @@ import time
 from collections import deque
 from pathlib import Path
 
+from .channels import public_link
 from .chat import ChatReader
+from .ytchat import YouTubeChatReader
 from .clipper import ClipWorker
 from .db import DB
 from .detector import DetectorConfig, SpikeDetector
@@ -35,15 +37,35 @@ class ChannelWatcher:
         self.last_spike: float | None = None
 
         s = db.settings()
-        self.rec = Recorder(name, rec_dir, s["quality"], self.stop)
+        row = db.channel(name) or {}
+        self.platform = row.get("platform") or "twitch"
+        self.rec = Recorder(name, rec_dir, s["quality"], self.stop, url=row.get("url"))
         self.clipper = ClipWorker(self.rec, name, clip_dir,
-                                  lambda: db.clip_config(name), self.stop, on_clip)
-        self.chat = ChatReader(name, chat_dir / f"{name}.jsonl", self._on_msg, self.stop)
+                                  lambda: db.clip_config(name), self.stop, on_clip,
+                                  get_chat=self._chat_between,
+                                  context_on=lambda: bool(db.settings().get("context_overlay", True)))
+        if self.platform == "youtube":
+            self.chat = YouTubeChatReader(row["url"], chat_dir / f"{name}.jsonl", self._on_msg, self.stop,
+                                          on_info=self._yt_info,
+                                          cookies=lambda: db.settings().get("ytdlp_cookies"))
+        else:
+            self.chat = ChatReader(name, chat_dir / f"{name}.jsonl", self._on_msg, self.stop)
         self._on_clip = on_clip
         self.clipper.on_clip = self._with_heat
+        self.clipper.label = lambda: (db.channel(name) or {}).get("label") or name
         self.loop = threading.Thread(target=self._run, daemon=True, name=f"detect-{name}")
         for t in (self.rec, self.clipper, self.chat, self.loop):
             t.start()
+
+    def _yt_info(self, title: str, channel: str):
+        """Show the YouTube channel's name instead of an id once we know it."""
+        if channel:
+            self.db.x("UPDATE channels SET label=? WHERE name=?", (channel, self.name))
+        self.stream_title = title
+
+    def _chat_between(self, a: float, b: float) -> list[tuple[float, str, str]]:
+        with self.det_lock:
+            return [m for m in self.det.msgs if a <= m[0] <= b]
 
     def _with_heat(self, meta: dict):
         """Attach the chat-energy curve around the clip, for the studio's heat strip."""
@@ -92,6 +114,7 @@ class ChannelWatcher:
     def status(self) -> dict:
         live = self.rec.live_session
         return {
+            "note": getattr(self.chat, "note", None), "stream_title": getattr(self, "stream_title", None),
             "live": live is not None,
             "live_since": live.times[0] if live and live.times else None,
             "recorded_mb": round(live.size / 1e6, 1) if live else 0,
@@ -118,9 +141,12 @@ class Supervisor:
     def _on_clip(self, meta: dict):
         s = self.db.settings()
         when = time.strftime("%d %b", time.localtime(meta["created"]))
-        title = f"{meta['channel']} moment ({when})"
-        link = f"https://twitch.tv/{meta['channel']}"
-        meta.update(title=title, caption=render_caption(s["caption_template"], title, meta["channel"], link),
+        ch = self.db.channel(meta["channel"])
+        link = public_link(ch, meta["channel"])
+        meta["source_kind"] = (ch or {}).get("platform") or "twitch"
+        label = (ch or {}).get("label") or meta["channel"]
+        title = meta.get("title") or f"{label} moment ({when})"
+        meta.update(title=title, caption=render_caption(s["caption_template"], title, label, link),
                     source_url=link)
         self.db.add_clip(meta)
 

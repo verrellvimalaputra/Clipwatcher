@@ -13,6 +13,7 @@ from typing import Callable
 
 log = logging.getLogger("editing")
 
+FAST_MODEL = "base"  # rough full-length transcripts (finding/cutting); final captions use the configured model
 HIGHLIGHT = "&H003DB3F2&"  # amber #f2b33d in ASS BGR order
 
 
@@ -28,6 +29,8 @@ class ClipConfig:
     layout: str = "original"
     crf: int = 20
     facecam: dict | None = None   # split layout: {"x","y","w","h"} 0..1 of the source frame; None = auto-detect
+    context: str | None = None    # one line that sets up the situation, shown at the top for the first seconds
+    context_secs: float = 3.5
 
     @classmethod
     def from_settings(cls, s: dict) -> "ClipConfig":
@@ -143,8 +146,11 @@ def _ass_escape(s: str) -> str:
     return s.replace("\\", "\\\\").replace("{", "(").replace("}", ")").replace("\n", " ")
 
 
+CONTEXT_INK = "&H00041D2A&"   # #2a1d04 text on the amber "tally" box
+
+
 def write_ass(lines: list, path: Path, offset: float, width: int, height: int, end: float | None = None,
-              center_y: float | None = None) -> int:
+              center_y: float | None = None, context: str | None = None, context_secs: float = 3.5) -> int:
     """Short-form style captions: big bold lines, the word being spoken in amber.
     `lines` items are [start, end, text] or [start, end, text, words]; times are
     relative to the source and shifted by -offset."""
@@ -162,6 +168,10 @@ def write_ass(lines: list, path: Path, offset: float, width: int, height: int, e
         "MarginR, MarginV, Encoding",
         f"Style: Cap,DejaVu Sans,{fs},&H00FFFFFF,&H00FFFFFF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,"
         f"{max(3, fs // 14)},{max(1, fs // 30)},2,{width // 12},{width // 12},{margin_v},1",
+        # context banner: dark text on an amber box (BorderStyle 3 = opaque box in OutlineColour)
+        f"Style: Context,DejaVu Sans,{round(height * (0.029 if vertical else 0.045))},{CONTEXT_INK},{CONTEXT_INK},"
+        f"{HIGHLIGHT},&H00000000,-1,0,0,0,100,100,0,0,3,{max(8, round(height * 0.009))},0,8,"
+        f"{width // 10},{width // 10},{round(height * (0.055 if vertical else 0.06))},1",
         "", "[Events]", "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
     ]
     n = 0
@@ -177,6 +187,11 @@ def write_ass(lines: list, path: Path, offset: float, width: int, height: int, e
         out.append(f"Dialogue: 0,{_ass_time(a)},{_ass_time(b)},Cap,,0,0,0,,{text}")
         n += 1
 
+    if context and context.strip():
+        dur = context_secs if clip_end is None else min(context_secs, max(clip_end, 0.5))
+        out.append(f"Dialogue: 1,{_ass_time(0)},{_ass_time(dur)},Context,,0,0,0,,"
+                   f"{{\\fad(150,300)}}{_ass_escape(context.strip())[:140]}")
+        n += 1
     for ln in lines:
         start, stop, text = ln[0], ln[1], ln[2]
         words = ln[3] if len(ln) > 3 and ln[3] else None
@@ -532,8 +547,9 @@ def render(src: Path, out_mp4: Path, cfg: ClipConfig, captions: list | None,
             base = "[0:v]null[base]"
         ow, oh = (1080, 1920) if layout in ("split", "auto", "fit", "crop") else (iw, ih)
         graph = base
-        if captions and write_ass(captions, tdp / "c.ass", offset=start, width=ow, height=oh, end=end,
-                                  center_y=cap_y):
+        if (captions or cfg.context) and write_ass(captions or [], tdp / "c.ass", offset=start, width=ow, height=oh,
+                                                   end=end, center_y=cap_y, context=cfg.context,
+                                                   context_secs=cfg.context_secs):
             graph += ";[base]subtitles=c.ass[v]"
         else:
             graph += ";[base]null[v]"

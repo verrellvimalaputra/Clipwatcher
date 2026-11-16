@@ -55,3 +55,35 @@ def test_youtube_chat_replay_parsing(tmp_path):
                                         "message": {"runs": [{"text": "no way "}, {"emoji": {"shortcuts": [":fire:"]}}]}}}}}]}}
     f.write_text(json.dumps(line) + "\n" + "not json\n")
     assert youtube_chat(f) == [(61.5, "ana", "no way :fire:")]
+
+
+def test_twitch_cut_without_claude_uses_sentence_edges(monkeypatch):
+    from clipwatcher import moments
+    monkeypatch.setattr(moments, "claude_available", lambda: False)
+    words, segs = transcript(30)          # sentences start every ~3.8 s
+    cut = moments.twitch_cut(words, segs, [], spike=80.0, duration=110.0, channel="x", pre=30, post=15)
+    starts = [s[0] for s in segs]
+    assert cut["how"] == "sentences"
+    assert any(abs(cut["start"] + 0.15 - s) < 0.01 for s in starts)   # begins on a sentence start
+    assert cut["start"] <= 52                                          # a little earlier rather than later
+    assert 80 < cut["end"] <= 96
+
+
+def test_twitch_cut_rejects_claude_cut_that_misses_the_moment(monkeypatch):
+    from clipwatcher import moments
+    monkeypatch.setattr(moments, "claude_available", lambda: True)
+    monkeypatch.setattr(moments, "run_claude", lambda *a, **k: '{"start": 5, "end": 30, "title": "t", "context": "c"}')
+    words, segs = transcript(30)
+    cut = moments.twitch_cut(words, segs, [], spike=80.0, duration=110.0, channel="x")
+    assert cut["how"] == "sentences"       # 5-30 s doesn't contain the spike at 80 s -> fallback
+
+
+def test_twitch_cut_takes_good_claude_cut(monkeypatch):
+    from clipwatcher import moments
+    monkeypatch.setattr(moments, "claude_available", lambda: True)
+    monkeypatch.setattr(moments, "run_claude",
+                        lambda *a, **k: 'ok {"start": 50.5, "end": 86, "title": "He thought he won", "context": "Last 1v1"}')
+    words, segs = transcript(30)
+    cut = moments.twitch_cut(words, segs, [], spike=80.0, duration=110.0, channel="x")
+    assert cut["how"] == "claude" and cut["title"] == "He thought he won" and cut["context"] == "Last 1v1"
+    assert 47 < cut["start"] < 54 and 84 < cut["end"] < 90

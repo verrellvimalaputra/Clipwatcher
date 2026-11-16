@@ -49,6 +49,7 @@ aside{border-right:1px solid var(--line-soft);display:flex;flex-direction:column
 @keyframes onair{50%{box-shadow:0 0 0 6px rgba(229,72,77,.05)}}
 @media (prefers-reduced-motion:reduce){.dot.live{animation:none}}
 .chan-name{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.plat-tag{font-weight:500;font-size:11px;color:var(--faint);margin-left:6px}
 .chan-sub{grid-column:2/4;color:var(--muted);font-size:12.5px;display:flex;justify-content:space-between;gap:8px}
 .badge{min-width:22px;height:20px;padding:0 6px;border-radius:10px;background:var(--tally);color:var(--tally-ink);font-size:12px;font-weight:700;display:grid;place-items:center}
 .spark{grid-column:1/4;height:22px;width:100%;display:block}
@@ -192,7 +193,7 @@ main{display:flex;flex-direction:column;min-width:0;min-height:0}
 .imp-url .btn{flex:none}
 .imp-or{display:flex;align-items:center;gap:10px;color:var(--muted);font-size:13.5px;margin:12px 0 0}
 .imp-or label{cursor:pointer;color:var(--tally)}
-.imp-opts{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:16px}
+.imp-opts{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-top:16px}
 .imp-note{color:var(--muted);font-size:13px;margin:12px 0 0}
 .jobs{max-width:760px;margin-top:22px;display:flex;flex-direction:column;gap:10px}
 .job{background:var(--panel);border-radius:var(--r-m);padding:14px 16px}
@@ -248,7 +249,7 @@ main{display:flex;flex-direction:column;min-width:0;min-height:0}
 <div class="app" id="app">
   <aside>
     <div class="brand"><div class="brand-mark" aria-hidden="true"></div><div class="brand-name">clipwatcher <span>studio</span></div></div>
-    <form class="add" id="addForm"><input id="addInput" placeholder="Add Twitch channel" aria-label="Twitch channel name" autocomplete="off"><button>Add</button></form>
+    <form class="add" id="addForm"><input id="addInput" placeholder="Twitch name or YouTube live link" aria-label="Twitch channel, or YouTube live link or @channel" autocomplete="off"><button>Add</button></form>
     <div class="chan-list" id="chanList"></div>
     <div class="mobile-nav"><button class="chip-btn" data-go="queue">Clips</button><button class="chip-btn" data-go="import">Import video</button><button class="chip-btn" data-go="settings">Settings</button></div>
     <div class="aside-foot">
@@ -319,6 +320,7 @@ async function refreshClip() {
 }
 
 /* ---------------- channels ---------------- */
+const chanLabel = name => { const c = (S.state?.channels || []).find(c => c.name === name); return (c && c.label) || name; };
 function spark(hist) {
   if (!hist || hist.length < 2) return "";
   const W = 200, H = 22, max = Math.max(...hist.map(h => Math.max(h[1], h[2] * 3)), 1);
@@ -332,7 +334,9 @@ function renderChannels() {
   const list = $("#chanList"), chans = S.state?.channels || [];
   list.innerHTML = chans.map(c => {
     const st = c.status, live = st?.live, paused = !c.enabled;
-    const sub = paused ? "Paused" : live ? `Live · ${st.msgs_per_min} msgs/min` : st?.chat_connected ? "Offline, waiting" : "Connecting…";
+    const yt = c.platform === "youtube";
+    const sub = paused ? "Paused" : live ? `Live · ${st.msgs_per_min} msgs/min` : yt ? (st?.note || "Checking the stream…")
+              : st?.chat_connected ? "Offline, waiting" : "Connecting…";
     const menu = S.openMenu === c.name ? `<div class="chan-menu" onclick="event.stopPropagation()">
         <button class="chip-btn" onclick="toggleChan('${c.name}', ${!c.enabled})">${c.enabled ? "Pause" : "Resume"}</button>
         <label title="Spike when chat is this many times busier than the last 5 min">Ratio <input type="number" step="0.5" min="1.5" value="${c.ratio ?? ""}" placeholder="${S.settings?.ratio ?? 3}" onchange="setChan('${c.name}','ratio',this.value)"></label>
@@ -340,7 +344,7 @@ function renderChannels() {
         <button class="chip-btn danger" onclick="removeChan('${c.name}')">Remove</button></div>` : "";
     return `<div class="chan ${S.channel === c.name ? "sel" : ""}" onclick="pickChannel('${c.name}')" oncontextmenu="event.preventDefault();toggleMenu('${c.name}')">
       <span class="dot ${live ? "live" : paused ? "paused" : ""}" title="${live ? "Live" : paused ? "Paused" : "Offline"}"></span>
-      <span class="chan-name">${esc(c.name)}</span>
+      <span class="chan-name" title="${esc(c.url || c.name)}">${esc(c.label || c.name)}<span class="plat-tag">${yt ? "YouTube" : "Twitch"}</span></span>
       ${c.pending ? `<span class="badge num" title="Clips to review">${c.pending}</span>` : `<span></span>`}
       <span class="chan-sub"><span>${sub}</span><button class="linkbtn" onclick="event.stopPropagation();toggleMenu('${c.name}')" aria-label="Channel options">${S.openMenu === c.name ? "Done" : "Edit"}</button></span>
       ${live ? spark(st.history) : ""}${menu}</div>`;
@@ -369,7 +373,7 @@ window.removeChan = async name => {
 async function addChannel(input) {
   const name = input.value.trim(); if (!name) return;
   try { const r = await api("/api/channels", {method: "POST", body: {name}}); input.value = "";
-    toast(`Watching ${r.name}. Clips arrive when they go live and chat spikes`); loadState();
+    toast(`Watching ${r.label || r.name}. Clips arrive when they're live and chat spikes`); loadState();
   } catch (e) { toast(e.message, true); }
 }
 $("#addForm").onsubmit = e => { e.preventDefault(); addChannel($("#addInput")); };
@@ -393,7 +397,7 @@ function renderQueueHead() {
   const sub = S.job ? `From ${S.job.channel || "a video"}` : S.channel ? (t?.status?.live ? "Live now" : "Offline") :
     `${(S.state?.channels || []).length} channels · ${live} live${S.state?.posting ? ` · posting ${S.state.posting}` : ""}${rr && rr.done < rr.total ? ` · re-rendering ${rr.done + 1} of ${rr.total}` : ""}`;
   const tabs = [["pending","To review"],["approved","Approved"],["rejected","Rejected"]];
-  h.innerHTML = `<h1 class="qtitle">${esc(S.job ? S.job.title : S.channel || "All clips")}<small>${esc(sub)}${S.job || S.channel ? ` · <button class="linkbtn" onclick="clearFilter()">Show all clips</button>` : ""}</small></h1>
+  h.innerHTML = `<h1 class="qtitle">${esc(S.job ? S.job.title : S.channel ? chanLabel(S.channel) : "All clips")}<small>${esc(sub)}${S.job || S.channel ? ` · <button class="linkbtn" onclick="clearFilter()">Show all clips</button>` : ""}</small></h1>
     <div class="tabs" role="tablist">${tabs.map(([k,l]) => `<button role="tab" aria-selected="${S.tab===k}" class="tab ${S.tab===k?"on":""}" onclick="setTab('${k}')">${l}${!S.channel && !S.job && tot[k] ? `<span class="n num">${tot[k]}</span>` : ""}</button>`).join("")}</div>`;
 }
 window.clearFilter = () => { S.job = null; S.channel = ""; showView(); };
@@ -401,8 +405,8 @@ window.setTab = t => { S.tab = t; renderQueueHead(); loadClips(); };
 function renderQueue() {
   const g = $("#grid"); if (!g) return;
   if (!(S.state?.channels || []).length && !S.clips.length && S.tab === "pending" && !S.job) {
-    g.innerHTML = `<div class="empty"><h2>Add a streamer or import a video</h2><p><button class="linkbtn" onclick="go('import')">Paste a YouTube link</button> to cut a long video into clips, or add a Twitch channel below.</p><p>clipwatcher waits for them to go live, records the stream and cuts a clip whenever chat reacts.</p>
-      <form class="add" onsubmit="event.preventDefault();addChannel(this.querySelector('input'))"><input placeholder="twitch.tv/channel" aria-label="Twitch channel"><button>Add</button></form></div>`;
+    g.innerHTML = `<div class="empty"><h2>Add a streamer or import a video</h2><p><button class="linkbtn" onclick="go('import')">Paste a YouTube link</button> to cut a long video into clips, or add a live channel below: a Twitch name, or a YouTube live link or @channel.</p><p>clipwatcher waits for them to go live, records the stream and cuts a clip whenever chat reacts.</p>
+      <form class="add" onsubmit="event.preventDefault();addChannel(this.querySelector('input'))"><input placeholder="twitch.tv/name or youtube.com/@name" aria-label="Twitch channel or YouTube live link"><button>Add</button></form></div>`;
     return;
   }
   if (!S.clips.length) {
@@ -418,7 +422,7 @@ function renderQueue() {
     return `<button class="tile ${S.sel === c.id ? "sel" : ""}" onclick="select(${c.id})" aria-label="${esc(c.title)}">
       <div class="thumb">${c.thumb ? `<img loading="lazy" src="/media/${encodeURIComponent(c.thumb)}?v=${encodeURIComponent(c.file)}" alt="">` : ""}
         <span class="heatbar" title="${ratio.toFixed(1)}× normal chat">${bars}</span><span class="dur num">${mmss(c.duration || 0)}</span></div>
-      <div class="tile-meta"><b>${esc(c.title)}</b><span>${esc(c.channel)} · ${ago(c.created)}</span>${ps ? `<div class="pstat">${ps}</div>` : ""}</div></button>`;
+      <div class="tile-meta"><b>${esc(c.title)}</b><span>${esc(chanLabel(c.channel))} · ${ago(c.created)}</span>${ps ? `<div class="pstat">${ps}</div>` : ""}</div></button>`;
   }).join("");
 }
 
@@ -436,7 +440,7 @@ function renderReview() {
   const heatLabel = c.heat?.label === "replays" ? ["replays", "average"] : c.heat?.label === "loudness" ? ["loudness", "average"] : ["chat", "normal level"];
   r.innerHTML = `
   <div class="review-body">
-    <div class="rv-top"><div><h3>${esc(c.channel)}${c.source_kind === "video" ? `<span class="srcpill">${c.reason === "ai" ? "picked by Claude" : "video"}</span>` : ""}</h3><div class="sub">${new Date(c.created*1000).toLocaleString(undefined,{weekday:"short",hour:"2-digit",minute:"2-digit",day:"numeric",month:"short"})}</div></div>
+    <div class="rv-top"><div><h3>${esc(chanLabel(c.channel))}${c.source_kind === "youtube" ? `<span class="srcpill">YouTube live</span>` : ""}${c.source_kind === "video" ? `<span class="srcpill">${c.reason === "ai" ? "picked by Claude" : "video"}</span>` : ""}</h3><div class="sub">${new Date(c.created*1000).toLocaleString(undefined,{weekday:"short",hour:"2-digit",minute:"2-digit",day:"numeric",month:"short"})}</div></div>
       <div>${c.source_kind === "video" && c.source_url ? `<a class="linkbtn" href="${esc(c.source_url)}" target="_blank" rel="noopener">Source</a> · ` : ""}<a class="linkbtn" href="/media/${encodeURIComponent(c.file)}" download>Download</a>
       <button class="close" onclick="closeReview()" aria-label="Close">×</button></div></div>
     <div class="player"><video id="vid" src="/media/${encodeURIComponent(c.file)}" controls playsinline preload="metadata"></video></div>
@@ -447,12 +451,15 @@ function renderReview() {
       <div class="layout-row"><span class="grp">Layout
           <span class="seg" role="group" aria-label="Layout">${Object.entries(LAYOUT_LABELS).map(([k,l]) => `<button data-l="${k}" class="${layout===k?"on":""}" onclick="setLayout('${k}')">${l}</button>`).join("")}</span></span>
         <span class="grp"><button class="linkbtn" id="fcBtn" ${layout === "split" ? "" : "hidden"} onclick="openFacecam()">${c.facecam ? "Adjust facecam" : "Set facecam area"}</button></span></div>
-      ${c.layout === "fit" && (S.settings?.layout === "split") && c.source_kind === "twitch" && !c.facecam ? `<div class="hint" style="margin-top:6px">No facecam was found in this clip, so it uses Fit. Set the facecam area to switch it to Split.</div>` : ""}
+      ${c.layout === "fit" && (S.settings?.layout === "split") && c.source_kind !== "video" && !c.facecam ? `<div class="hint" style="margin-top:6px">No facecam was found in this clip, so it uses Fit. Set the facecam area to switch it to Split.</div>` : ""}
     </div>
     <div class="why"><p>${why}</p><ul>${(c.chat_sample || []).slice(-5).map(m => `<li>${esc(m)}</li>`).join("")}</ul></div>
     <div class="field"><label for="fTitle"><span>Title</span>${S.state?.claude ? `<button class="linkbtn" onclick="suggestTitles(this)">Suggest titles</button>` : ""}</label>
       <input id="fTitle" value="${esc(c.title)}" maxlength="100">
       <div class="suggest" id="sugg"></div></div>
+    <div class="field"><label for="fCtx"><span>Text on the video</span><span>${S.settings?.context_overlay === false ? "turned off in Settings" : "first 3 seconds"}</span></label>
+      <input id="fCtx" value="${esc(c.context || "")}" maxlength="140" placeholder="One line that tells a new viewer what's going on">
+      ${!c.context && !S.state?.claude ? `<div class="hint">Claude Code writes this line for new clips once it's set up. You can always type your own.</div>` : ""}</div>
     <div class="field"><label for="fCap"><span>Caption</span><span class="num" id="capN"></span></label><textarea id="fCap">${esc(c.caption)}</textarea></div>
     ${c.transcript ? `<div class="field"><label><span>What they said</span></label><div class="hint" style="color:var(--muted);font-size:13.5px">${esc(c.transcript)}</div></div>` : ""}
     <div><div class="field"><label><span>Post to</span>${plats.some(p => !p.connected) ? `<button class="linkbtn" onclick="go('settings')">Connect accounts</button>` : ""}</label></div>
@@ -465,6 +472,8 @@ function renderReview() {
   $("#fTitle").addEventListener("input", e => { const old = S.clip.title; S.clip.title = e.target.value;
     const cap = $("#fCap"); if (old && cap.value.includes(old)) { cap.value = cap.value.replace(old, e.target.value); S.clip.caption = cap.value; } capCount(); });
   $("#fCap").addEventListener("input", e => { S.clip.caption = e.target.value; capCount(); });
+  $("#fCtx").addEventListener("input", e => { S.ctx = e.target.value; trimChanged(); });
+  S.ctx = null;
   capCount(); drawHeat(); renderPosts(); renderActions(); setupHeatDrag();
 }
 function capCount() { const n = $("#fCap")?.value.length || 0; const el = $("#capN"); if (el) el.textContent = n > 2200 ? `${n}/2200, too long for Instagram/TikTok` : `${n}`; }
@@ -534,7 +543,8 @@ function drawHeat() {
 function trimChanged() {
   const c = S.clip, D = heatDomain();
   const changed = Math.abs(S.trim.start - (c.trim_start || 0)) > .2 || Math.abs((S.trim.end ?? D) - (c.trim_end ?? D)) > .2
-                  || (S.layout && S.layout !== (c.layout || S.settings?.layout));
+                  || (S.layout && S.layout !== (c.layout || S.settings?.layout))
+                  || (S.ctx != null && S.ctx.trim() !== (c.context || ""));
   const b = $("#applyBtn"); if (b) b.hidden = !changed;
 }
 function setupHeatDrag() {
@@ -568,7 +578,7 @@ window.openFacecam = async () => {
     <h3 id="fcT">Facecam area</h3>
     <p>Drag the box onto the streamer's webcam and resize it from the corners. This part goes on top; the middle of the gameplay goes below.</p>
     <div class="fc-stage" id="fcStage"><img id="fcImg" alt="Frame from this clip" src="/api/clips/${c.id}/frame?ts=${Date.now()}"><div class="fc-box" id="fcBox"><i class="rz nw"></i><i class="rz ne"></i><i class="rz sw"></i><i class="rz se"></i></div></div>
-    <div class="fc-foot"><label><input type="checkbox" id="fcSave" checked> Use this area for all clips from ${esc(c.channel)}</label>
+    <div class="fc-foot"><label><input type="checkbox" id="fcSave" checked> Use this area for all clips from ${esc(chanLabel(c.channel))}</label>
       <span class="btns"><button class="btn" id="fcDetect">Find it automatically</button><button class="btn" id="fcCancel">Cancel</button><button class="btn primary" id="fcApply" style="flex:none">Apply</button></span></div></div>`;
   document.body.appendChild(back);
   const stage = $("#fcStage"), el = $("#fcBox");
@@ -599,7 +609,7 @@ window.openFacecam = async () => {
       const D = heatDomain(); const end = S.trim.end != null && S.trim.end < D - .2 ? S.trim.end : null;
       const nc = await api(`/api/clips/${c.id}/render`, {method: "POST", body: {start: S.trim.start, end, layout: "split", ...body}});
       S.clip = {...nc, title: S.clip.title, caption: S.clip.caption}; S.layout = null; close(); renderReview(); loadClips();
-      toast(nc.layout === "split" ? (body.save_for_channel ? `Saved for ${c.channel}. Clip re-rendered` : "Clip re-rendered") : "No facecam found. Draw the area yourself");
+      toast(nc.layout === "split" ? (body.save_for_channel ? `Saved for ${chanLabel(c.channel)}. Clip re-rendered` : "Clip re-rendered") : "No facecam found. Draw the area yourself");
     } catch (e) { toast(e.message, true); btn.disabled = false; btn.textContent = label === "detect" ? "Find it automatically" : "Apply"; }
   };
   $("#fcApply").onclick = () => run({facecam: {x: box.x, y: box.y, w: box.w, h: box.h}, save_for_channel: $("#fcSave").checked}, "apply");
@@ -609,7 +619,8 @@ window.applyRender = async () => {
   const b = $("#applyBtn"); b.disabled = true; b.textContent = "Rendering…";
   try {
     const D = heatDomain(); const end = S.trim.end != null && S.trim.end < D - .2 ? S.trim.end : null;
-    const c = await api(`/api/clips/${S.clip.id}/render`, {method: "POST", body: {start: S.trim.start, end, layout: S.layout || S.clip.layout || S.settings?.layout}});
+    const c = await api(`/api/clips/${S.clip.id}/render`, {method: "POST", body: {start: S.trim.start, end, layout: S.layout || S.clip.layout || S.settings?.layout,
+      ...(S.ctx != null ? {context: S.ctx} : {})}});
     const keep = {title: S.clip.title, caption: S.clip.caption};
     S.clip = {...c, ...keep}; S.trim = {start: c.trim_start || 0, end: c.trim_end};
     renderReview(); loadClips(); toast("Clip re-rendered");
@@ -645,7 +656,7 @@ window.saveText = async () => { await api(`/api/clips/${S.sel}`, {method: "PATCH
 window.retry = async id => { await api(`/api/posts/${id}/retry`, {method: "POST"}); toast("Trying again"); refreshClip(); };
 
 /* ---------------- import ---------------- */
-const IMP = {length: "medium", count: "auto", layout: "", language: ""};
+const IMP = {length: "medium", count: "auto", layout: "", language: "", download: "auto"};
 try { Object.assign(IMP, JSON.parse(localStorage.getItem("cw.imp") || "{}")); } catch {}
 function renderImport() {
   const opt = (k, label, opts) => `<div class="field"><label for="i-${k}"><span>${label}</span></label><select id="i-${k}" onchange="IMP['${k}']=this.value;localStorage.setItem('cw.imp',JSON.stringify(IMP))">${opts.map(([v,l]) => `<option value="${v}" ${String(IMP[k])===v?"selected":""}>${l}</option>`).join("")}</select></div>`;
@@ -660,8 +671,9 @@ function renderImport() {
       ${opt("count", "Number of clips", [["auto","Auto"],["3","3"],["5","5"],["10","10"],["15","15"]])}
       ${opt("layout", "Layout", [["","Default (" + ({split:"Split",auto:"Auto",fit:"Fit",crop:"Crop",original:"Original"}[S.settings?.import_layout] || "Auto") + ")"],["split","Split: facecam on top"],["auto","Auto: follows faces"],["fit","Fit: blurred background"],["crop","Crop: center"],["original","Original"]])}
       ${opt("language", "Language", [["","Detect automatically"],["en","English"],["id","Indonesian"],["de","German"]])}
+      ${opt("download", "Download", [["auto","Auto"],["clips","Only the clips"],["full","Whole video"]])}
     </div>
-    <p class="imp-note">${finder} Long videos take a while: transcribing runs on your computer.</p>
+    <p class="imp-note">${finder} Auto downloads only the clips for videos over 20 minutes: it reads the chat replay and captions first.</p>
   </div><div class="jobs" id="jobs"></div></div>`;
   loadJobs();
 }
@@ -686,10 +698,10 @@ async function loadJobs() {
       ${j.error ? `<div class="job-err">${esc(j.error)}</div>` : ""}</div>`;
   }).join("");
 }
-function impBody() { return {length: IMP.length, count: IMP.count, layout: IMP.layout || null, language: IMP.language || null}; }
+function impBody() { return {length: IMP.length, count: IMP.count, layout: IMP.layout || null, language: IMP.language || null, download: IMP.download || "auto"}; }
 window.startImport = async () => {
   const i = $("#impUrl"), url = i.value.trim(); if (!url) return i.focus();
-  try { await api("/api/imports", {method: "POST", body: {url, ...impBody()}}); i.value = ""; toast("Added. Downloading the video"); loadJobs(); loadState(); }
+  try { await api("/api/imports", {method: "POST", body: {url, ...impBody()}}); i.value = ""; toast("Added. Looking up the video"); loadJobs(); loadState(); }
   catch (e) { toast(e.message, true); }
 };
 window.uploadImport = file => {
@@ -737,11 +749,16 @@ async function renderSettings() {
           <button class="chip-btn" style="margin-top:8px" onclick="saveCred('${p.name}')">Save</button></li></ol>
         <div class="note">${warn[p.name]}</div>`}</div>`).join("")}
     </section>
+    <section><h2>Claude Code</h2><p class="lead">Claude picks where live clips start and end, writes the context line and titles, and picks moments in imported videos. It runs on your Claude subscription, not the paid API.</p>
+      <div class="acct"><div class="acct-head"><h3>Status</h3><span class="who ${S.state?.claude_status?.ok ? "ok" : ""}" id="clStatus">${esc(claudeStatusText())}</span></div>
+        <div id="clHint"></div>
+        <button class="chip-btn" style="margin-top:10px" onclick="testClaude(this)">Test the connection</button></div></section>
     <section><h2>Clips</h2><p class="lead">These apply to new clips. Each channel can override sensitivity from its Edit menu.</p>
       <div class="form2">
-        ${sel("layout", "Layout for Twitch clips", [["split","Split: facecam on top, gameplay below"],["auto","Auto: 9:16 that follows the speaker's face"],["fit","Fit: whole frame on a blurred 9:16 background"],["crop","Crop: center of the frame, 9:16"],["original","Original 16:9"]])}
-        <div class="field"><label><span>&nbsp;</span></label><button class="chip-btn" style="padding:8px 12px" onclick="bulkRender('layout','twitch')">Use this layout for Twitch clips waiting for review</button></div>
+        ${sel("layout", "Layout for live clips (Twitch, YouTube Live)", [["split","Split: facecam on top, gameplay below"],["auto","Auto: 9:16 that follows the speaker's face"],["fit","Fit: whole frame on a blurred 9:16 background"],["crop","Crop: center of the frame, 9:16"],["original","Original 16:9"]])}
+        <div class="field"><label><span>&nbsp;</span></label><button class="chip-btn" style="padding:8px 12px" onclick="bulkRender('layout','twitch')">Use this layout for live clips waiting for review</button></div>
         ${sel("captions", "Captions", [[true,"Burn in captions"],[false,"No captions"]])}
+        ${sel("context_overlay", "Context text on the video", [[true,"Show it for the first seconds"],[false,"Don't show it"]])}
         ${num("ratio", "Spike sensitivity", "Chat must be this many times busier than the last 5 minutes", 0.5)}
         ${num("min_score", "Minimum reaction", "At least this many chatters reacting at once", 1)}
         ${num("pre_roll", "Seconds before the spike", "Chat reacts after the moment, so keep this longer", 1)}
@@ -775,6 +792,20 @@ function sel(k, label, opts) { const v = S.settings[k];
   return `<div class="field"><label for="s-${k}"><span>${label}</span></label><select id="s-${k}" onchange="saveSetting('${k}', this.value === 'true' ? true : this.value === 'false' ? false : this.value)">${opts.map(([o,l]) => `<option value="${o}" ${String(v)===String(o)?"selected":""}>${l}</option>`).join("")}</select></div>`; }
 function num(k, label, hint, step) { return `<div class="field"><label for="s-${k}"><span>${label}</span></label><input id="s-${k}" type="number" step="${step}" value="${S.settings[k]}" onchange="saveSetting('${k}', this.value)">${hint ? `<div class="hint">${hint}</div>` : ""}</div>`; }
 function txt(k, label, hint) { return `<div class="field"><label for="s-${k}"><span>${label}</span></label><input id="s-${k}" value="${esc(S.settings[k])}" onchange="saveSetting('${k}', this.value.trim())">${hint ? `<div class="hint">${hint}</div>` : ""}</div>`; }
+function claudeStatusText() {
+  const st = S.state?.claude_status;
+  if (!S.state?.claude) return "Not set up: add CLAUDE_CODE_OAUTH_TOKEN to .env";
+  if (!st || st.ok === null) return "Set up, not tested yet";
+  return st.ok ? `Working${st.at ? " · last used " + ago(st.at) : ""}` : `Failing: ${st.message}`;
+}
+window.testClaude = async btn => {
+  btn.disabled = true; btn.textContent = "Testing…";
+  try { const r = await api("/api/claude/check", {method: "POST"});
+    $("#clStatus").textContent = r.ok ? r.message : `Failing: ${r.message}`; $("#clStatus").className = "who" + (r.ok ? " ok" : "");
+    $("#clHint").innerHTML = r.hint ? `<div class="note">${esc(r.hint)}</div>` : "";
+  } catch (e) { toast(e.message, true); }
+  btn.disabled = false; btn.textContent = "Test the connection";
+};
 window.bulkRender = async (key, kind) => {
   const layout = S.settings[key];
   try { const r = await api("/api/clips/rerender", {method: "POST", body: {layout, source_kind: kind}});

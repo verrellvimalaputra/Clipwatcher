@@ -31,6 +31,7 @@ class Moment:
     score: float = 50.0
     source: str = "ai"   # ai | heuristic
     extra: dict = field(default_factory=dict)
+    context: str = ""    # one line that sets up the situation for someone with no context
 
     def to_dict(self):
         return asdict(self)
@@ -180,6 +181,36 @@ def claude_available() -> bool:
     return bool(os.environ.get("CLAUDE_CODE_OAUTH_TOKEN")) or (Path.home() / ".claude" / ".credentials.json").exists()
 
 
+CLAUDE_STATUS = {"ok": None, "message": "Not checked yet", "at": 0.0}
+
+
+def _claude_failed(msg: str):
+    import time as _t
+    CLAUDE_STATUS.update(ok=False, message=msg[:300], at=_t.time())
+
+
+def claude_check() -> dict:
+    """Run a tiny prompt so the studio can show whether Claude Code really works."""
+    import time as _t
+    if not shutil.which("claude"):
+        _claude_failed("Claude Code isn't installed in this container (rebuild with WITH_CLAUDE=1)")
+    elif not claude_available():
+        _claude_failed("No login: set CLAUDE_CODE_OAUTH_TOKEN in .env (output of `claude setup-token`)")
+    else:
+        try:
+            out = run_claude("Reply with exactly: OK", "", timeout=90)
+            CLAUDE_STATUS.update(ok=True, message=f"Connected (replied {out.strip()[:20]!r})", at=_t.time())
+        except Exception as e:  # run_claude records most failures; timeouts etc. land here
+            if CLAUDE_STATUS["ok"] is not False:
+                _claude_failed(str(e))
+    tok = os.environ.get("CLAUDE_CODE_OAUTH_TOKEN", "")
+    hint = None
+    if tok and not tok.startswith("sk-ant-"):
+        hint = ("This token doesn't look like one from `claude setup-token` (those start with sk-ant-). "
+                "You may have pasted the code from the browser login page instead of the final token.")
+    return {**CLAUDE_STATUS, "hint": hint}
+
+
 def run_claude(instructions: str, stdin_text: str, timeout: int = 900) -> str:
     """claude -p on the subscription: ANTHROPIC_API_KEY is stripped so it can never
     bill the API, tools are off, and it runs in an empty dir (no CLAUDE.md)."""
@@ -191,9 +222,15 @@ def run_claude(instructions: str, stdin_text: str, timeout: int = 900) -> str:
     try:
         out = json.loads(r.stdout)
     except ValueError:
-        raise RuntimeError((r.stderr or r.stdout).strip()[:300] or "no output from Claude Code")
+        msg = (r.stderr or r.stdout).strip()[:300] or "no output from Claude Code"
+        _claude_failed(msg)
+        raise RuntimeError(msg)
     if r.returncode != 0 or out.get("is_error"):
-        raise RuntimeError(str(out.get("result") or r.stderr)[:300])
+        msg = str(out.get("result") or r.stderr)[:300]
+        _claude_failed(msg)
+        raise RuntimeError(msg)
+    import time as _t
+    CLAUDE_STATUS.update(ok=True, message="Connected", at=_t.time())
     return out.get("result", "")
 
 
@@ -228,8 +265,12 @@ def claude_moments(info: dict, segments: list[list], signals: dict, length: str,
         f"Prefer moments the signals point to, but only if the transcript there is actually good. Skip intros, "
         f"sponsor reads and outros.\n"
         f"Titles: max 70 characters, same language as the video, curiosity-driven but true, no hashtags.\n"
+        f"Context: one short line (max 60 characters, same language) shown on screen for the first seconds, "
+        f"telling a viewer who never saw the video what's going on, e.g. who is talking or what's at stake. "
+        f"Don't repeat the title or spoil the payoff.\n"
         f"Reply with ONLY JSON: {{\"clips\": [{{\"start\": <seconds>, \"end\": <seconds>, \"title\": \"...\", "
-        f"\"why\": \"one sentence on why this will hold attention\", \"score\": <0-100 virality>}}]}}")
+        f"\"context\": \"...\", \"why\": \"one sentence on why this will hold attention\", "
+        f"\"score\": <0-100 virality>}}]}}")
     text = run_claude(instructions, body)
     m = re.search(r"\{.*\}", text, re.S)
     if not m:
@@ -242,7 +283,7 @@ def claude_moments(info: dict, segments: list[list], signals: dict, length: str,
             continue
         if e > s:
             out.append(Moment(s, e, str(c.get("title", ""))[:100], str(c.get("why", "")),
-                              float(c.get("score", 50)), "ai"))
+                              float(c.get("score", 50)), "ai", context=str(c.get("context", ""))[:120]))
     return out
 
 
@@ -304,3 +345,72 @@ def find_moments(info: dict, words: list[list], segments: list[list], signals: d
     snapped = [x for x in (snap(m, words, segments, lo, hi) for m in ms) if x]
     best = sorted(dedupe(snapped), key=lambda m: -m.score)[:n]
     return sorted(best, key=lambda m: m.start), finder
+
+
+# ---------------------------------------------------------------- Twitch: where does the story start?
+def _nearest(vals, t, tol):
+    best = min(vals, key=lambda v: abs(v - t), default=None)
+    return best if best is not None and abs(best - t) <= tol else None
+
+
+def twitch_cut(words: list[list], segments: list[list], chat: list[tuple[float, str, str]], spike: float,
+               duration: float, channel: str, pre: float = 30, post: float = 15,
+               use_claude: bool = True) -> dict:
+    """Pick where a Twitch clip should start and end inside a longer raw slice.
+
+    A fixed "30 s before the chat spike" often starts mid-sentence, after the
+    situation was set up. Claude Code reads what was said plus the chat around
+    the spike and picks the start of the setup and the end of the payoff, and
+    writes a title and a one-line context. Without Claude, the fixed window is
+    moved to the nearest sentence edges. Times are seconds inside the slice.
+    Returns {start, end, title, context, how}."""
+    fallback = _sentence_cut(words, segments, spike, duration, pre, post)
+    if not (use_claude and claude_available() and segments):
+        return fallback
+    try:
+        lines = "\n".join(f"[{fmt(a)}] {txt}" for a, b, txt in segments)
+        msgs = "\n".join(f"[{fmt(t)}] {u}: {x}" for t, u, x in chat[-250:])
+        body = (f"STREAMER: {channel}\nCHAT SPIKE AT: {fmt(spike)} (chat exploded here, so the moment itself "
+                f"happened a few seconds before)\nSLICE LENGTH: {fmt(duration)}\n\n"
+                f"WHAT WAS SAID ([mm:ss] = start of line):\n{lines or '(no speech)'}\n\n"
+                f"CHAT ([mm:ss] user: message):\n{msgs or '(no chat)'}")
+        instructions = (
+            "You cut Twitch stream moments into short vertical clips for TikTok, Shorts and Reels. The text on "
+            "stdin is everything said around a moment where chat exploded, plus the chat. Pick the clip so a "
+            "viewer who never watched the stream understands it: START where the situation that leads to the "
+            "moment begins (not in the middle of a sentence, and not with long unrelated talk before it), END "
+            "right after the payoff/reaction. 15-60 seconds; it must include the moment just before the chat "
+            "spike. Then write, in the stream's language: a title (max 70 characters, true, no hashtags) and a "
+            "context line (max 60 characters) shown on screen for the first seconds that sets up what's going on "
+            "without spoiling the payoff. Reply with ONLY JSON: "
+            '{"start": <seconds>, "end": <seconds>, "title": "...", "context": "..."}')
+        text = run_claude(instructions, body, timeout=240)
+        m = re.search(r"\{.*\}", text, re.S)
+        c = json.loads(m.group(0)) if m else {}
+        s, e = float(c["start"]), float(c["end"])
+        if not (0 <= s < e <= duration + 1 and 12 <= e - s <= 75 and e >= spike - 4 and s <= spike - 3):
+            raise ValueError(f"unusable cut {s}-{e} for spike at {spike}")
+        snapped = snap(Moment(s, e, ""), words, segments, 12, 75)
+        if not snapped:
+            raise ValueError("cut too short after snapping")
+        return {"start": snapped.start, "end": min(snapped.end, duration), "title": str(c.get("title", ""))[:100],
+                "context": str(c.get("context", ""))[:120], "how": "claude"}
+    except Exception as e:
+        log.warning("Claude Code couldn't cut this clip, using sentence edges: %s", e)
+        return fallback
+
+
+def _sentence_cut(words, segments, spike, duration, pre, post) -> dict:
+    """The classic window (pre/post around the spike), moved to sentence edges:
+    start at a sentence start a little earlier rather than later, end at a sentence end."""
+    s_target, e_target = max(spike - pre, 0), min(spike + post, duration)
+    starts = [a for a, _, _ in segments if a <= s_target + 2]
+    s = _nearest(starts, s_target - 2, 8)
+    if s is None:
+        s = _nearest([w[0] for w in words], s_target, 2) or s_target
+    ends = [b for _, b, _ in segments if b >= spike]
+    e = _nearest(ends, e_target, 5)
+    if e is None:
+        e = _nearest([w[1] for w in words], e_target, 2) or e_target
+    s, e = max(s - 0.15, 0), min(e + 0.35, duration)
+    return {"start": round(s, 2), "end": round(e, 2), "title": "", "context": "", "how": "sentences"}

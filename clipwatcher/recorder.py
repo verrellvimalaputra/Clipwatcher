@@ -62,10 +62,11 @@ class Session:
 
 
 class Recorder(threading.Thread):
-    def __init__(self, channel: str, outdir: Path, quality: str, stop: threading.Event,
+    def __init__(self, channel: str, outdir: Path, quality: str, stop: threading.Event, url: str | None = None,
                  extra_args: list[str] | None = None):
         super().__init__(daemon=True, name="recorder")
         self.channel, self.outdir, self.quality, self.stop = channel, outdir, quality, stop
+        self.url = url or f"https://twitch.tv/{channel}"  # streamlink handles Twitch and YouTube Live
         self.extra_args = extra_args or []
         self.sessions: list[Session] = []
         self.lock = threading.Lock()
@@ -92,16 +93,32 @@ class Recorder(threading.Thread):
     def run(self):
         while not self.stop.is_set():
             cmd = ["streamlink", "--retry-streams", "30", "--retry-open", "3",
-                   *self.extra_args, f"https://twitch.tv/{self.channel}", self.quality, "--stdout"]
+                   *self.extra_args, self.url, self.quality, "--stdout"]
             log.info("waiting for %s to go live...", self.channel)
-            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=0)
+            # keep streamlink's own messages: they explain disconnects ("why does it reconnect every 7 min?")
+            errlog = open(self.outdir / f"{self.channel}.streamlink.log", "ab")
+            errlog.write(f"--- {datetime.now():%Y-%m-%d %H:%M:%S} start\n".encode())
+            errlog.flush()
+            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=errlog, bufsize=0)
             self.proc = proc
             try:
                 self._record(proc)
             finally:
                 proc.kill()
                 proc.wait()
+                errlog.write(f"--- {datetime.now():%Y-%m-%d %H:%M:%S} exit code {proc.returncode}\n".encode())
+                errlog.close()
+                self._trim_log(self.outdir / f"{self.channel}.streamlink.log")
             self.stop.wait(10)
+
+    @staticmethod
+    def _trim_log(path: Path, keep: int = 200_000):
+        try:
+            if path.stat().st_size > keep * 2:
+                data = path.read_bytes()[-keep:]
+                path.write_bytes(data)
+        except OSError:
+            pass
 
     def _record(self, proc: subprocess.Popen):
         first = proc.stdout.read(TS_PACKET * 350)  # blocks until the stream is live

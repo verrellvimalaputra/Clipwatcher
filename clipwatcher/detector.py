@@ -26,8 +26,24 @@ HYPE_WORDS = [
     r"kekw", r"lul", r"lmao+", r"omegalul", r"pog\w*", r"pogchamp", r"poggers",
     r"w+", r"hah(a|ah)+", r"xd+", r"wtf", r"no+ way", r"holy", r"insane",
     r"clip", r"monkas", r"pepelaugh", r"icant", r"aware", r"kappa",
+    # YouTube chat + Indonesian / German reactions
+    r"wk(wk)+\w*", r"awok\w*", r"anjir+", r"anjay", r"njir", r"gila+", r"kocak", r"buset", r"astaga",
+    r"krass", r"digga", r"alter", r"ehrenlos", r"hahaha+",
+    r":face[-_]with[-_]tears[-_]of[-_]joy:", r":rolling[-_]on[-_]the[-_]floor[-_]laughing:", r":skull:", r":fire:",
+    "\U0001F602", "\U0001F923", "\U0001F480", "\U0001F525",
 ]
 HYPE_RE = re.compile(r"(?<!\w)(" + "|".join(HYPE_WORDS) + r")(?!\w)", re.IGNORECASE)
+
+# Reactions: short messages people spam when something just happened. In big
+# streams chat is always full, so the VOLUME barely moves at a great moment, but
+# the share of people reacting does (e.g. a wave of "gg" when a match ends).
+# Roll calls ("aku", "absen", "hadir") are deliberately not in here.
+REACTION_WORDS = HYPE_WORDS + [
+    r"g+g+", r"g g", r"ggwp", r"wp", r"ez", r"rip", r"l+", r"no+", r"yah+", r"wa+duh", r"a+duh", r"ngakak\w*",
+    r"gokil", r"mantap\w*", r"sadis", r"gacor", r"keren", r"bang+ke", r"what", r"bro+", r"omg", r"lmfao",
+    r"hilarious", r"dead", r"crazy", r"nah+", r"bruh+",
+]
+REACT_RE = re.compile(r"(?<!\w)(" + "|".join(REACTION_WORDS) + r")(?!\w)", re.IGNORECASE)
 CLIP_RE = re.compile(r"(?<!\w)clip(\s*(it|that|this))?(?!\w)", re.IGNORECASE)
 
 
@@ -51,6 +67,8 @@ class DetectorConfig:
     cooldown: float = 60.0     # min seconds between two spikes
     hype_bonus: float = 0.5    # extra weight per chatter using a hype word
     clip_calls: int = 3        # this many different people saying "clip" triggers too
+    react_ratio: float = 2.6   # ...or this many times more people REACTING than usual (big, always-busy chats)
+    react_min: int = 25        # ...with at least this many reacting chatters in the window
     bots: set[str] = field(default_factory=lambda: set(DEFAULT_BOTS))
 
 
@@ -59,6 +77,7 @@ class SpikeDetector:
         self.cfg = cfg or DetectorConfig()
         self.msgs: deque[tuple[float, str, str]] = deque()
         self.scores: deque[tuple[float, float]] = deque()
+        self.reacts: deque[tuple[float, int]] = deque()
         self.first_t: float | None = None
         self.last_spike = float("-inf")
 
@@ -73,6 +92,9 @@ class SpikeDetector:
     def _window(self, now: float):
         lo = now - self.cfg.window
         return [m for m in self.msgs if lo < m[0] <= now]
+
+    def _reacting(self, win) -> int:
+        return len({u for _, u, text in win if REACT_RE.search(text)})
 
     def _score(self, win) -> tuple[float, int]:
         users = {}
@@ -89,6 +111,8 @@ class SpikeDetector:
             self.msgs.popleft()
         while self.scores and self.scores[0][0] < keep:
             self.scores.popleft()
+        while self.reacts and self.reacts[0][0] < keep:
+            self.reacts.popleft()
 
         win = self._window(now)
         score, clippers = self._score(win)
@@ -97,6 +121,10 @@ class SpikeDetector:
         past = [s for (t, s) in self.scores if now - c.window - c.baseline_span <= t < now - c.window]
         baseline = max(sum(past) / len(past) if past else 0.0, c.baseline_floor)
         self.scores.append((now, score))
+        reacting = self._reacting(win)
+        rpast = [r for (t, r) in self.reacts if now - c.window - c.baseline_span <= t < now - c.window]
+        rbase = max(sum(rpast) / len(rpast) if rpast else 0.0, c.baseline_floor)
+        self.reacts.append((now, reacting))
 
         if self.first_t is None or now - self.first_t < c.warmup:
             return None
@@ -108,6 +136,9 @@ class SpikeDetector:
             reason = "ratio"
         elif clippers >= c.clip_calls:
             reason = "clip-calls"
+        elif reacting >= c.react_min and reacting >= c.react_ratio * rbase:
+            reason = "reactions"
+            score, baseline = float(reacting), rbase
         if not reason:
             return None
 

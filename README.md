@@ -66,6 +66,11 @@ finding moments, editing). When it's done, **Review N clips** opens them.
   payoff, and titles each one. YouTube's "Most replayed" graph and, for past
   livestreams, the chat replay are given to it as hints. Without Claude Code,
   a fallback picks from those signals plus loudness.
+- **Download (long streams):** *Auto* downloads only the clips for videos
+  over 20 minutes. It reads the chat replay and YouTube's captions first
+  (a few MB), picks the moments, then downloads just those parts of the video.
+  If there are no captions it downloads only the audio to transcribe.
+  *Whole video* downloads everything first, as before. Uploads are always whole.
 - **Layouts:** *Auto* follows the speaker's face in a 9:16 crop (great for
   podcasts and talking heads) and falls back to *Fit* when there are no faces,
   e.g. gameplay.
