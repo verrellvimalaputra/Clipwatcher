@@ -1,0 +1,14 @@
+# secrets + local data (tokens, studio.db, recordings, clips, cookies)
+.env
+data/
+data-demo/
+*.db
+*.db-*
+cookies*.txt
+.claude/
+
+# python
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/

@@ -1,0 +1,21 @@
+services:
+  studio:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./data:/data
+      - ./data/.claude:/root/.claude  # keeps a Claude Code login if you use `claude /login` instead of a token
+    env_file: .env      # STUDIO_PASSWORD, CLAUDE_CODE_OAUTH_TOKEN, ... (copy .env.example to .env)
+
+  # Optional: a free HTTPS address without opening ports or buying a domain.
+  # Run `docker compose --profile tunnel up -d`, then `docker compose logs tunnel`
+  # shows a https://….trycloudflare.com address. Put it in PUBLIC_URL.
+  # (Quick tunnels get a new address on every restart; for a permanent one,
+  # use a named Cloudflare tunnel with your own domain.)
+  tunnel:
+    image: cloudflare/cloudflared:latest
+    profiles: ["tunnel"]
+    restart: unless-stopped
+    command: tunnel --no-autoupdate --url http://studio:8080

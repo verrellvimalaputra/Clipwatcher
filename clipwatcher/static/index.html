@@ -1,0 +1,815 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>clipwatcher studio</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&family=Instrument+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#1e1b24; --panel:#26222e; --raised:#302b3a; --line:#3b3546; --line-soft:#2f2a38;
+  --text:#ede8f2; --muted:#9c94a8; --faint:#6f6880;
+  --tally:#f2b33d; --tally-ink:#2a1d04; --live:#e5484d; --ok:#5bb98c; --warn:#e8915a;
+  --display:"Bricolage Grotesque", "Instrument Sans", system-ui, sans-serif;
+  --ui:"Instrument Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --r-s:6px; --r-m:10px;
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;overflow:hidden;background:var(--bg);color:var(--text);font:15px/1.45 var(--ui);-webkit-font-smoothing:antialiased}
+button,input,textarea,select{font:inherit;color:inherit}
+button{cursor:pointer}
+:focus-visible{outline:2px solid var(--tally);outline-offset:2px}
+a{color:var(--tally)}
+.num{font-variant-numeric:tabular-nums}
+
+/* ---------- shell ---------- */
+body{display:flex;flex-direction:column;height:100vh;height:100dvh}
+.app{flex:1;min-height:0;display:grid;grid-template-columns:248px minmax(0,1fr) 452px}
+.app.settings-open{grid-template-columns:248px minmax(0,1fr)}
+aside{border-right:1px solid var(--line-soft);display:flex;flex-direction:column;min-height:0}
+.brand{display:flex;align-items:center;gap:10px;padding:18px 18px 14px}
+.brand-mark{width:14px;height:14px;border-radius:50%;background:var(--tally);box-shadow:0 0 0 4px rgba(242,179,61,.18)}
+.brand-name{font:800 19px/1 var(--display);letter-spacing:-.01em}
+.brand-name span{color:var(--muted);font-weight:500}
+
+.add{display:flex;gap:6px;padding:0 14px 14px}
+.add input{flex:1;min-width:0;background:var(--panel);border:1px solid var(--line);border-radius:var(--r-s);padding:8px 10px}
+.add input::placeholder{color:var(--faint)}
+.add button{background:var(--raised);border:1px solid var(--line);border-radius:var(--r-s);padding:0 12px;font-weight:600}
+
+.chan-list{flex:1;overflow:auto;padding:0 8px}
+.chan{display:grid;grid-template-columns:auto 1fr auto;align-items:center;gap:4px 10px;padding:10px;border-radius:var(--r-m);cursor:pointer;position:relative}
+.chan:hover{background:var(--panel)}
+.chan.sel{background:var(--raised)}
+.dot{width:9px;height:9px;border-radius:50%;background:var(--faint)}
+.dot.live{background:var(--live);box-shadow:0 0 0 3px rgba(229,72,77,.22);animation:onair 2.4s ease-in-out infinite}
+.dot.paused{background:transparent;border:1.5px solid var(--faint)}
+@keyframes onair{50%{box-shadow:0 0 0 6px rgba(229,72,77,.05)}}
+@media (prefers-reduced-motion:reduce){.dot.live{animation:none}}
+.chan-name{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.chan-sub{grid-column:2/4;color:var(--muted);font-size:12.5px;display:flex;justify-content:space-between;gap:8px}
+.badge{min-width:22px;height:20px;padding:0 6px;border-radius:10px;background:var(--tally);color:var(--tally-ink);font-size:12px;font-weight:700;display:grid;place-items:center}
+.spark{grid-column:1/4;height:22px;width:100%;display:block}
+.chan-menu{grid-column:1/4;display:flex;flex-wrap:wrap;gap:6px;padding-top:6px}
+.chip-btn{background:var(--bg);border:1px solid var(--line);border-radius:var(--r-s);padding:4px 9px;font-size:12.5px}
+.chip-btn.danger{color:#f0a3a5}
+.chan-menu label{display:flex;align-items:center;gap:6px;font-size:12.5px;color:var(--muted)}
+.chan-menu input{width:58px;background:var(--bg);border:1px solid var(--line);border-radius:var(--r-s);padding:3px 6px}
+
+.aside-foot{border-top:1px solid var(--line-soft);padding:10px 8px}
+.nav-btn{width:100%;text-align:left;background:none;border:0;border-radius:var(--r-m);padding:9px 10px;display:flex;justify-content:space-between;color:var(--muted)}
+.nav-btn:hover,.nav-btn.on{background:var(--panel);color:var(--text)}
+.nav-btn .warn{color:var(--warn)}
+
+/* ---------- queue ---------- */
+main{display:flex;flex-direction:column;min-width:0;min-height:0}
+.qhead{display:flex;align-items:flex-end;justify-content:space-between;gap:16px;padding:20px 24px 0;flex-wrap:wrap}
+.qtitle{font:700 28px/1.1 var(--display);letter-spacing:-.015em;margin:0}
+.qtitle small{display:block;font:500 13px var(--ui);color:var(--muted);letter-spacing:0;margin-top:6px}
+.tabs{display:flex;gap:2px;background:var(--panel);border-radius:var(--r-m);padding:3px}
+.tab{background:none;border:0;border-radius:7px;padding:6px 12px;color:var(--muted);font-weight:500}
+.tab.on{background:var(--raised);color:var(--text)}
+.tab .n{color:var(--faint);margin-left:4px}
+.grid{flex:1;overflow:auto;padding:20px 24px 32px;display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:18px 14px;align-content:start}
+.tile{background:none;border:0;padding:0;text-align:left;display:flex;flex-direction:column;gap:7px}
+.thumb{position:relative;aspect-ratio:9/16;border-radius:var(--r-m);overflow:hidden;background:var(--panel);outline:2px solid transparent;outline-offset:3px;transition:outline-color .12s}
+.thumb img{width:100%;height:100%;object-fit:cover;display:block}
+.tile.sel .thumb{outline-color:var(--tally)}
+.thumb .dur{position:absolute;right:6px;bottom:6px;background:rgba(20,17,25,.82);border-radius:4px;padding:1px 6px;font-size:12px}
+.thumb .heatbar{position:absolute;left:6px;bottom:6px;display:flex;align-items:flex-end;gap:2px;height:18px}
+.thumb .heatbar i{width:3px;background:var(--tally);border-radius:1px;opacity:.9}
+.tile-meta{font-size:13px;line-height:1.3}
+.tile-meta b{font-weight:600;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tile-meta span{color:var(--muted)}
+.pstat{display:flex;gap:4px;margin-top:3px}
+.pstat i{font-style:normal;font-size:11px;padding:0 5px;border-radius:4px;background:var(--panel);color:var(--muted)}
+.pstat i.posted{color:var(--ok)} .pstat i.failed{color:var(--live)} .pstat i.uploading,.pstat i.queued{color:var(--tally)}
+
+.empty{grid-column:1/-1;max-width:440px;margin:60px auto;text-align:center;color:var(--muted)}
+.empty h2{font:700 22px var(--display);color:var(--text);margin:0 0 8px}
+.empty .add{padding:16px 0 0;max-width:340px;margin:0 auto}
+
+/* ---------- review ---------- */
+.review[hidden]{display:none !important}
+.review{border-left:1px solid var(--line-soft);display:flex;flex-direction:column;min-height:0;background:var(--panel)}
+.review-body{flex:1;overflow:auto;padding:18px 20px 12px;display:flex;flex-direction:column;gap:16px}
+.rv-top{display:flex;justify-content:space-between;align-items:center;gap:10px}
+.rv-top h3{margin:0;font:700 17px var(--display)}
+.rv-top .sub{color:var(--muted);font-size:13px}
+.close{display:none;background:none;border:0;font-size:22px;color:var(--muted);padding:0 4px}
+.player{background:#000;border-radius:var(--r-m);overflow:hidden;flex:none}
+.player video{display:block;width:100%;height:min(52vh,560px);object-fit:contain;background:#000}
+
+.heat{position:relative;height:74px;background:var(--bg);border-radius:var(--r-s);touch-action:none;user-select:none}
+.heat svg{position:absolute;inset:0;width:100%;height:100%}
+.heat .h{position:absolute;top:0;bottom:0;width:14px;margin-left:-7px;cursor:ew-resize;display:grid;place-items:center}
+.heat .h::after{content:"";width:4px;height:44px;border-radius:2px;background:var(--text)}
+.heat-legend{display:flex;justify-content:space-between;align-items:center;font-size:12.5px;color:var(--muted);margin-top:6px;gap:8px;flex-wrap:wrap}
+.heat-legend .key{display:flex;gap:12px}
+.heat-legend .key span::before{content:"";display:inline-block;width:10px;height:3px;border-radius:2px;margin-right:5px;vertical-align:middle;background:var(--tally)}
+.heat-legend .key span.base::before{background:var(--faint)}
+.seg{display:inline-flex;background:var(--bg);border-radius:var(--r-s);padding:2px}
+.seg button{background:none;border:0;border-radius:4px;padding:3px 9px;font-size:12.5px;color:var(--muted)}
+.seg button.on{background:var(--raised);color:var(--text)}
+.apply{background:var(--text);color:var(--bg);border:0;border-radius:var(--r-s);padding:4px 10px;font-weight:600;font-size:12.5px}
+
+.field label{display:flex;justify-content:space-between;font-size:13px;color:var(--muted);margin-bottom:5px}
+.field input,.field textarea,.field select{width:100%;background:var(--bg);border:1px solid var(--line);border-radius:var(--r-s);padding:8px 10px;resize:vertical}
+.field textarea{min-height:92px}
+.linkbtn{background:none;border:0;padding:0;color:var(--tally);font-size:13px}
+.suggest{display:flex;flex-direction:column;gap:4px;margin-top:6px}
+.suggest button{text-align:left;background:var(--bg);border:1px dashed var(--line);border-radius:var(--r-s);padding:6px 9px;font-size:13.5px}
+
+.why{font-size:13px;color:var(--muted);border-left:2px solid var(--line);padding-left:10px}
+.why p{margin:0 0 4px;color:var(--text)}
+.why ul{list-style:none;margin:0;padding:0}
+.why li{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+.plats{display:flex;gap:8px;flex-wrap:wrap}
+.plat{display:flex;align-items:center;gap:7px;background:var(--bg);border:1px solid var(--line);border-radius:999px;padding:6px 12px 6px 8px;font-size:13.5px}
+.plat .box{width:16px;height:16px;border-radius:4px;border:1.5px solid var(--faint);display:grid;place-items:center;font-size:11px;line-height:1}
+.plat.on{border-color:var(--tally)}
+.plat.on .box{background:var(--tally);border-color:var(--tally);color:var(--tally-ink)}
+.plat:disabled{opacity:.5;cursor:not-allowed}
+.posts{display:flex;flex-direction:column;gap:8px}
+.post{background:var(--bg);border-radius:var(--r-s);padding:9px 11px;font-size:13.5px}
+.post .row{display:flex;justify-content:space-between;gap:8px;align-items:center}
+.post .st{font-weight:600}
+.post .st.posted{color:var(--ok)} .post .st.failed{color:var(--live)} .post .st.uploading,.post .st.queued{color:var(--tally)}
+.post .msg{color:var(--muted);font-size:12.5px;margin-top:4px;word-break:break-word}
+
+.actions{border-top:1px solid var(--line);padding:12px 20px calc(12px + env(safe-area-inset-bottom));display:flex;gap:10px;background:var(--panel)}
+.btn{border-radius:var(--r-m);padding:11px 16px;font-weight:600;border:1px solid var(--line);background:var(--raised)}
+.btn.primary{flex:1;background:var(--tally);color:var(--tally-ink);border-color:var(--tally);font-size:15.5px}
+.btn.primary:disabled{opacity:.6}
+.kbd{display:inline-block;min-width:18px;padding:0 4px;border-radius:4px;border:1px solid currentColor;font-size:11px;line-height:16px;text-align:center;opacity:.6;margin-left:6px}
+.rv-empty{flex:1;display:grid;place-items:center;text-align:center;color:var(--muted);padding:30px}
+.rv-empty p{max-width:260px}
+
+/* ---------- settings ---------- */
+.settings{flex:1;overflow:auto;padding:20px 24px 60px}
+.settings section{max-width:760px;margin-bottom:34px}
+.settings h2{font:700 20px var(--display);margin:0 0 4px}
+.settings .lead{color:var(--muted);margin:0 0 14px;max-width:62ch}
+.acct{background:var(--panel);border-radius:var(--r-m);padding:16px;margin-bottom:12px}
+.acct-head{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}
+.acct-head h3{margin:0;font-size:16px}
+.acct-head .who{color:var(--muted);font-size:13.5px}
+.acct-head .who.ok{color:var(--ok)}
+.acct ol{margin:12px 0 0;padding-left:20px;color:var(--muted);font-size:13.5px}
+.acct ol li{margin-bottom:8px}
+.copy{display:flex;gap:6px;margin-top:4px}
+.copy code{flex:1;background:var(--bg);border-radius:var(--r-s);padding:6px 9px;color:var(--text);overflow:auto;white-space:nowrap;font-size:12.5px}
+.form2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.form2 .wide{grid-column:1/-1}
+.hint{color:var(--faint);font-size:12.5px;margin-top:4px}
+.note{background:rgba(242,179,61,.08);border-left:2px solid var(--tally);padding:8px 12px;font-size:13.5px;color:var(--text);margin:10px 0;border-radius:0 var(--r-s) var(--r-s) 0}
+
+/* ---------- layout + facecam editor ---------- */
+.layout-row{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-top:10px;font-size:13px;color:var(--muted)}
+.layout-row .grp{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.fc-back{position:fixed;inset:0;background:rgba(18,15,22,.82);z-index:40;display:grid;place-items:center;padding:20px}
+.fc{background:var(--panel);border-radius:var(--r-m);padding:18px;width:min(980px,100%);max-height:100%;overflow:auto;display:flex;flex-direction:column;gap:12px}
+.fc h3{margin:0;font:700 18px var(--display)}
+.fc p{margin:0;color:var(--muted);font-size:13.5px}
+.fc-stage{position:relative;user-select:none;touch-action:none;border-radius:var(--r-s);overflow:hidden;background:#000}
+.fc-stage img{display:block;width:100%;height:auto;pointer-events:none}
+.fc-box{position:absolute;border:2px solid var(--tally);box-shadow:0 0 0 9999px rgba(18,15,22,.55);cursor:move}
+.fc-box .rz{position:absolute;width:16px;height:16px;background:var(--tally);border-radius:3px}
+.fc-box .rz.nw{left:-8px;top:-8px;cursor:nwse-resize}.fc-box .rz.ne{right:-8px;top:-8px;cursor:nesw-resize}
+.fc-box .rz.sw{left:-8px;bottom:-8px;cursor:nesw-resize}.fc-box .rz.se{right:-8px;bottom:-8px;cursor:nwse-resize}
+.fc-foot{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}
+.fc-foot label{display:flex;gap:8px;align-items:center;font-size:13.5px}
+.fc-foot .btns{display:flex;gap:8px}
+
+/* ---------- import ---------- */
+.imp{flex:1;overflow:auto;padding:8px 24px 60px}
+.imp-box{max-width:760px;background:var(--panel);border-radius:var(--r-m);padding:18px}
+.imp-url{display:flex;gap:8px}
+.imp-url input{flex:1;min-width:0;background:var(--bg);border:1px solid var(--line);border-radius:var(--r-m);padding:12px 14px;font-size:16px}
+.imp-url .btn{flex:none}
+.imp-or{display:flex;align-items:center;gap:10px;color:var(--muted);font-size:13.5px;margin:12px 0 0}
+.imp-or label{cursor:pointer;color:var(--tally)}
+.imp-opts{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:16px}
+.imp-note{color:var(--muted);font-size:13px;margin:12px 0 0}
+.jobs{max-width:760px;margin-top:22px;display:flex;flex-direction:column;gap:10px}
+.job{background:var(--panel);border-radius:var(--r-m);padding:14px 16px}
+.job-top{display:flex;justify-content:space-between;gap:12px;align-items:flex-start}
+.job-title{font-weight:600;overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+.job-sub{color:var(--muted);font-size:13px;margin-top:2px}
+.job-step{font-size:13.5px;margin-top:10px;display:flex;justify-content:space-between;gap:10px}
+.job-step.failed{color:#f0a3a5}
+.job-step.done{color:var(--ok)}
+.bar{height:4px;background:var(--bg);border-radius:2px;margin-top:6px;overflow:hidden}
+.bar i{display:block;height:100%;background:var(--tally);border-radius:2px;transition:width .4s}
+.job-actions{display:flex;gap:6px;flex:none}
+.job-err{color:var(--muted);font-size:12.5px;margin-top:6px;word-break:break-word}
+.srcpill{display:inline-block;font-size:11px;padding:0 6px;border-radius:4px;background:var(--raised);color:var(--muted);margin-left:6px;vertical-align:1px}
+@media (max-width:720px){.imp{padding:8px 14px 60px}.imp-opts{grid-template-columns:1fr 1fr}.imp-url{flex-direction:column}}
+.toast{position:fixed;left:50%;bottom:22px;transform:translateX(-50%);background:var(--text);color:var(--bg);padding:10px 16px;border-radius:var(--r-m);font-weight:500;z-index:50;max-width:90vw;box-shadow:0 10px 30px rgba(0,0,0,.35)}
+.toast.err{background:var(--live);color:#fff}
+.demo{background:var(--tally);color:var(--tally-ink);font-size:12.5px;padding:5px 12px;text-align:center;font-weight:600}
+
+/* ---------- responsive ---------- */
+@media (max-width:1180px){
+  .app{grid-template-columns:220px minmax(0,1fr)}
+  .review{position:fixed;inset:0 0 0 auto;width:min(452px,100vw);z-index:20;transform:translateX(100%);transition:transform .2s ease;box-shadow:-20px 0 40px rgba(0,0,0,.4)}
+  .review.open{transform:none}
+  .close{display:block}
+  @media (prefers-reduced-motion:reduce){.review{transition:none}}
+}
+@media (max-width:720px){
+  .app,.app.settings-open{grid-template-columns:1fr;grid-template-rows:auto minmax(0,1fr)}
+  .player video{height:46vh}
+  aside{border-right:0;border-bottom:1px solid var(--line-soft)}
+  .brand{padding:12px 14px 8px}
+  .chan-list{display:flex;overflow-x:auto;gap:6px;padding:0 10px 10px;flex:none}
+  .chan{grid-template-columns:auto auto auto;flex:none;background:var(--panel);padding:7px 10px}
+  .chan .spark,.chan .chan-sub{display:none}
+  .chan-menu{grid-column:1/4}
+  .add{padding:0 10px 10px}
+  .aside-foot{display:none}
+  .mobile-nav{display:flex !important}
+  .qhead{padding:14px 14px 0}
+  .qtitle{font-size:23px}
+  .grid{padding:14px;grid-template-columns:repeat(auto-fill,minmax(104px,1fr));gap:14px 10px}
+  .review{width:100vw}
+  .settings{padding:14px 14px 60px}
+  .form2{grid-template-columns:1fr}
+}
+.mobile-nav{display:none;gap:6px;padding:0 10px 10px}
+.mobile-nav button{flex:1}
+</style>
+</head>
+<body>
+<div id="demo" class="demo" hidden>Demo mode: approving runs the full flow but nothing is really posted</div>
+<div class="app" id="app">
+  <aside>
+    <div class="brand"><div class="brand-mark" aria-hidden="true"></div><div class="brand-name">clipwatcher <span>studio</span></div></div>
+    <form class="add" id="addForm"><input id="addInput" placeholder="Add Twitch channel" aria-label="Twitch channel name" autocomplete="off"><button>Add</button></form>
+    <div class="chan-list" id="chanList"></div>
+    <div class="mobile-nav"><button class="chip-btn" data-go="queue">Clips</button><button class="chip-btn" data-go="import">Import video</button><button class="chip-btn" data-go="settings">Settings</button></div>
+    <div class="aside-foot">
+      <button class="nav-btn" data-go="queue" id="navQueue"><span>All clips</span><span class="num" id="navQueueN"></span></button>
+      <button class="nav-btn" data-go="import" id="navImport"><span>Import a video</span><span class="num" id="navImportN"></span></button>
+      <button class="nav-btn" data-go="settings" id="navSettings"><span>Settings and accounts</span><span id="navSettingsN"></span></button>
+    </div>
+  </aside>
+
+  <main id="main"></main>
+
+  <section class="review" id="review" aria-label="Clip review"></section>
+</div>
+<div id="toast" class="toast" hidden role="status"></div>
+
+<script>
+const $ = (s, el = document) => el.querySelector(s);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const PLAT = {youtube: "YouTube", instagram: "Instagram", tiktok: "TikTok"};
+const S = {state: null, clips: [], tab: "pending", channel: "", job: null, jobs: [], view: "queue", sel: null, clip: null,
+           trim: null, layout: null, openMenu: null, suggest: [], settings: null, busy: false};
+
+async function api(path, opts = {}) {
+  const r = await fetch(path, {headers: {"Content-Type": "application/json"}, ...opts,
+    body: opts.body ? JSON.stringify(opts.body) : undefined});
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data.detail || `Request failed (${r.status})`);
+  return data;
+}
+let toastT;
+function toast(msg, err) {
+  const t = $("#toast"); t.textContent = msg; t.className = "toast" + (err ? " err" : ""); t.hidden = false;
+  clearTimeout(toastT); toastT = setTimeout(() => t.hidden = true, err ? 6000 : 2800);
+}
+const ago = ts => { const s = Date.now()/1000 - ts;
+  if (s < 60) return "just now"; if (s < 3600) return `${Math.floor(s/60)} min ago`;
+  if (s < 86400) return `${Math.floor(s/3600)} h ago`; return new Date(ts*1000).toLocaleDateString(undefined,{day:"numeric",month:"short"}); };
+const mmss = s => `${Math.floor(s/60)}:${String(Math.floor(s%60)).padStart(2,"0")}`;
+
+/* ---------------- data ---------------- */
+async function loadState() {
+  try { S.state = await api("/api/state"); } catch { return; }
+  $("#demo").hidden = !S.state.demo;
+  renderChannels(); renderNav();
+  if (S.view === "queue") renderQueueHead();
+}
+async function loadClips() {
+  const q = new URLSearchParams({status: S.tab, channel: S.channel, job: S.job?.id || 0});
+  S.clips = await api("/api/clips?" + q);
+  if (S.view === "queue") renderQueue();
+}
+async function select(id) {
+  S.sel = id; S.suggest = [];
+  if (id == null) { S.clip = null; renderReview(); renderQueue(); return; }
+  S.clip = await api(`/api/clips/${id}`);
+  S.trim = {start: S.clip.trim_start || 0, end: S.clip.trim_end};
+  S.layout = null;
+  renderQueue(); renderReview(true);
+  $("#review").classList.add("open");
+}
+async function refreshClip() {
+  if (!S.sel) return;
+  const c = await api(`/api/clips/${S.sel}`).catch(() => null);
+  if (!c) return;
+  const changed = JSON.stringify(c.posts) !== JSON.stringify(S.clip?.posts) || c.status !== S.clip?.status;
+  S.clip = {...c, title: S.clip.title, caption: S.clip.caption};  // keep unsaved edits
+  if (changed) renderPosts();
+}
+
+/* ---------------- channels ---------------- */
+function spark(hist) {
+  if (!hist || hist.length < 2) return "";
+  const W = 200, H = 22, max = Math.max(...hist.map(h => Math.max(h[1], h[2] * 3)), 1);
+  const pts = hist.map((h, i) => `${(i/(hist.length-1)*W).toFixed(1)},${(H - h[1]/max*(H-2) - 1).toFixed(1)}`).join(" ");
+  const th = H - (hist.at(-1)[2]*3)/max*(H-2) - 1;
+  return `<svg class="spark" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" aria-hidden="true">
+    <line x1="0" x2="${W}" y1="${th}" y2="${th}" stroke="#6f6880" stroke-dasharray="2 3" stroke-width="1" vector-effect="non-scaling-stroke"/>
+    <polyline points="${pts}" fill="none" stroke="#f2b33d" stroke-width="1.5" vector-effect="non-scaling-stroke"/></svg>`;
+}
+function renderChannels() {
+  const list = $("#chanList"), chans = S.state?.channels || [];
+  list.innerHTML = chans.map(c => {
+    const st = c.status, live = st?.live, paused = !c.enabled;
+    const sub = paused ? "Paused" : live ? `Live · ${st.msgs_per_min} msgs/min` : st?.chat_connected ? "Offline, waiting" : "Connecting…";
+    const menu = S.openMenu === c.name ? `<div class="chan-menu" onclick="event.stopPropagation()">
+        <button class="chip-btn" onclick="toggleChan('${c.name}', ${!c.enabled})">${c.enabled ? "Pause" : "Resume"}</button>
+        <label title="Spike when chat is this many times busier than the last 5 min">Ratio <input type="number" step="0.5" min="1.5" value="${c.ratio ?? ""}" placeholder="${S.settings?.ratio ?? 3}" onchange="setChan('${c.name}','ratio',this.value)"></label>
+        <label title="Minimum number of chatters reacting">Min <input type="number" step="1" min="1" value="${c.min_score ?? ""}" placeholder="${S.settings?.min_score ?? 8}" onchange="setChan('${c.name}','min_score',this.value)"></label>
+        <button class="chip-btn danger" onclick="removeChan('${c.name}')">Remove</button></div>` : "";
+    return `<div class="chan ${S.channel === c.name ? "sel" : ""}" onclick="pickChannel('${c.name}')" oncontextmenu="event.preventDefault();toggleMenu('${c.name}')">
+      <span class="dot ${live ? "live" : paused ? "paused" : ""}" title="${live ? "Live" : paused ? "Paused" : "Offline"}"></span>
+      <span class="chan-name">${esc(c.name)}</span>
+      ${c.pending ? `<span class="badge num" title="Clips to review">${c.pending}</span>` : `<span></span>`}
+      <span class="chan-sub"><span>${sub}</span><button class="linkbtn" onclick="event.stopPropagation();toggleMenu('${c.name}')" aria-label="Channel options">${S.openMenu === c.name ? "Done" : "Edit"}</button></span>
+      ${live ? spark(st.history) : ""}${menu}</div>`;
+  }).join("");
+}
+function renderNav() {
+  const t = S.state?.totals || {};
+  $("#navQueueN").textContent = t.pending || "";
+  $("#navQueue").classList.toggle("on", S.view === "queue" && !S.channel && !S.job);
+  $("#navSettings").classList.toggle("on", S.view === "settings");
+  $("#navImport").classList.toggle("on", S.view === "import");
+  $("#navImportN").textContent = S.state?.importing ? `${S.state.importing} running` : "";
+  const missing = (S.state?.platforms || []).filter(p => !p.connected).length;
+  const f = S.state?.failed_posts || 0;
+  $("#navSettingsN").innerHTML = f ? `<span class="warn">${f} failed</span>` : missing ? `<span class="warn">${missing} to connect</span>` : "";
+}
+window.pickChannel = name => { S.channel = S.channel === name ? "" : name; S.job = null; if (S.view !== "queue") go("queue"); else showView(); };
+window.toggleMenu = name => { S.openMenu = S.openMenu === name ? null : name; renderChannels(); };
+window.toggleChan = async (name, en) => { await api(`/api/channels/${name}`, {method: "PATCH", body: {enabled: en}}); toast(en ? `Watching ${name} again` : `Paused ${name}`); loadState(); };
+window.setChan = async (name, k, v) => { await api(`/api/channels/${name}`, {method: "PATCH", body: {[k]: v}}); toast("Sensitivity saved"); };
+window.removeChan = async name => {
+  if (!confirm(`Stop watching ${name}? Clips already made are kept.`)) return;
+  await api(`/api/channels/${name}`, {method: "DELETE"}); if (S.channel === name) S.channel = ""; S.openMenu = null;
+  toast(`Removed ${name}`); loadState(); loadClips();
+};
+async function addChannel(input) {
+  const name = input.value.trim(); if (!name) return;
+  try { const r = await api("/api/channels", {method: "POST", body: {name}}); input.value = "";
+    toast(`Watching ${r.name}. Clips arrive when they go live and chat spikes`); loadState();
+  } catch (e) { toast(e.message, true); }
+}
+$("#addForm").onsubmit = e => { e.preventDefault(); addChannel($("#addInput")); };
+
+/* ---------------- queue ---------------- */
+function showView() {
+  $("#app").classList.toggle("settings-open", S.view !== "queue");
+  $("#review").hidden = S.view !== "queue";
+  renderChannels(); renderNav();
+  if (S.view === "settings") return renderSettings();
+  if (S.view === "import") return renderImport();
+  $("#main").innerHTML = `<div class="qhead" id="qhead"></div><div class="grid" id="grid" aria-live="polite"></div>`;
+  renderQueueHead(); loadClips();
+}
+function renderQueueHead() {
+  const h = $("#qhead"); if (!h) return;
+  const t = S.channel ? (S.state?.channels.find(c => c.name === S.channel)) : null;
+  const tot = S.state?.totals || {};
+  const live = (S.state?.channels || []).filter(c => c.status?.live).length;
+  const rr = S.state?.rerendering;
+  const sub = S.job ? `From ${S.job.channel || "a video"}` : S.channel ? (t?.status?.live ? "Live now" : "Offline") :
+    `${(S.state?.channels || []).length} channels · ${live} live${S.state?.posting ? ` · posting ${S.state.posting}` : ""}${rr && rr.done < rr.total ? ` · re-rendering ${rr.done + 1} of ${rr.total}` : ""}`;
+  const tabs = [["pending","To review"],["approved","Approved"],["rejected","Rejected"]];
+  h.innerHTML = `<h1 class="qtitle">${esc(S.job ? S.job.title : S.channel || "All clips")}<small>${esc(sub)}${S.job || S.channel ? ` · <button class="linkbtn" onclick="clearFilter()">Show all clips</button>` : ""}</small></h1>
+    <div class="tabs" role="tablist">${tabs.map(([k,l]) => `<button role="tab" aria-selected="${S.tab===k}" class="tab ${S.tab===k?"on":""}" onclick="setTab('${k}')">${l}${!S.channel && !S.job && tot[k] ? `<span class="n num">${tot[k]}</span>` : ""}</button>`).join("")}</div>`;
+}
+window.clearFilter = () => { S.job = null; S.channel = ""; showView(); };
+window.setTab = t => { S.tab = t; renderQueueHead(); loadClips(); };
+function renderQueue() {
+  const g = $("#grid"); if (!g) return;
+  if (!(S.state?.channels || []).length && !S.clips.length && S.tab === "pending" && !S.job) {
+    g.innerHTML = `<div class="empty"><h2>Add a streamer or import a video</h2><p><button class="linkbtn" onclick="go('import')">Paste a YouTube link</button> to cut a long video into clips, or add a Twitch channel below.</p><p>clipwatcher waits for them to go live, records the stream and cuts a clip whenever chat reacts.</p>
+      <form class="add" onsubmit="event.preventDefault();addChannel(this.querySelector('input'))"><input placeholder="twitch.tv/channel" aria-label="Twitch channel"><button>Add</button></form></div>`;
+    return;
+  }
+  if (!S.clips.length) {
+    const msg = {pending: ["Nothing to review", "New clips land here when chat spikes on a live channel."],
+                 approved: ["No approved clips yet", "Clips you approve show up here with their posting status."],
+                 rejected: ["Nothing rejected", "Rejected clips stay here until you delete them, in case you change your mind."]}[S.tab];
+    g.innerHTML = `<div class="empty"><h2>${msg[0]}</h2><p>${msg[1]}</p></div>`; return;
+  }
+  g.innerHTML = S.clips.map(c => {
+    const ratio = c.baseline ? c.score / c.baseline : 0;
+    const bars = [0.35, 0.5, 0.42, 1, 0.75].map((f, i) => `<i style="height:${Math.round(Math.min(18, 4 + (i === 3 ? Math.min(ratio, 6) / 6 * 14 : f * 8)))}px"></i>`).join("");
+    const ps = (c.posts || []).map(p => `<i class="${p.status}" title="${PLAT[p.platform]}: ${p.status}">${PLAT[p.platform][0]}${p.status==="posted"?"✓":p.status==="failed"?"!":"…"}</i>`).join("");
+    return `<button class="tile ${S.sel === c.id ? "sel" : ""}" onclick="select(${c.id})" aria-label="${esc(c.title)}">
+      <div class="thumb">${c.thumb ? `<img loading="lazy" src="/media/${encodeURIComponent(c.thumb)}?v=${encodeURIComponent(c.file)}" alt="">` : ""}
+        <span class="heatbar" title="${ratio.toFixed(1)}× normal chat">${bars}</span><span class="dur num">${mmss(c.duration || 0)}</span></div>
+      <div class="tile-meta"><b>${esc(c.title)}</b><span>${esc(c.channel)} · ${ago(c.created)}</span>${ps ? `<div class="pstat">${ps}</div>` : ""}</div></button>`;
+  }).join("");
+}
+
+/* ---------------- review ---------------- */
+function renderReview() {
+  const r = $("#review"), c = S.clip;
+  if (!c) { r.innerHTML = `<div class="rv-empty"><p>Pick a clip to watch it, see why it was cut, and approve it for posting.</p></div>`; return; }
+  const plats = S.state?.platforms || [];
+  let chosen; try { chosen = JSON.parse(localStorage.getItem("cw.plats") || "null"); } catch { chosen = null; }
+  chosen = chosen || plats.filter(p => p.connected).map(p => p.name);
+  S.chosen = new Set(chosen.filter(n => plats.find(p => p.name === n)?.connected));
+  const why = c.why ? c.why : c.reason === "clip-calls" ? "Several people in chat asked for a clip"
+            : `Chat was ${(c.score / Math.max(c.baseline, 1)).toFixed(1)}× busier than the 5 minutes before`;
+  const layout = S.layout || c.layout || S.settings?.layout || "fit";
+  const heatLabel = c.heat?.label === "replays" ? ["replays", "average"] : c.heat?.label === "loudness" ? ["loudness", "average"] : ["chat", "normal level"];
+  r.innerHTML = `
+  <div class="review-body">
+    <div class="rv-top"><div><h3>${esc(c.channel)}${c.source_kind === "video" ? `<span class="srcpill">${c.reason === "ai" ? "picked by Claude" : "video"}</span>` : ""}</h3><div class="sub">${new Date(c.created*1000).toLocaleString(undefined,{weekday:"short",hour:"2-digit",minute:"2-digit",day:"numeric",month:"short"})}</div></div>
+      <div>${c.source_kind === "video" && c.source_url ? `<a class="linkbtn" href="${esc(c.source_url)}" target="_blank" rel="noopener">Source</a> · ` : ""}<a class="linkbtn" href="/media/${encodeURIComponent(c.file)}" download>Download</a>
+      <button class="close" onclick="closeReview()" aria-label="Close">×</button></div></div>
+    <div class="player"><video id="vid" src="/media/${encodeURIComponent(c.file)}" controls playsinline preload="metadata"></video></div>
+    <div>
+      <div class="heat" id="heat"></div>
+      <div class="heat-legend"><span class="key"><span>${heatLabel[0]}</span><span class="base">${heatLabel[1]}</span></span>
+        <button class="apply" id="applyBtn" hidden onclick="applyRender()">Apply</button></div>
+      <div class="layout-row"><span class="grp">Layout
+          <span class="seg" role="group" aria-label="Layout">${Object.entries(LAYOUT_LABELS).map(([k,l]) => `<button data-l="${k}" class="${layout===k?"on":""}" onclick="setLayout('${k}')">${l}</button>`).join("")}</span></span>
+        <span class="grp"><button class="linkbtn" id="fcBtn" ${layout === "split" ? "" : "hidden"} onclick="openFacecam()">${c.facecam ? "Adjust facecam" : "Set facecam area"}</button></span></div>
+      ${c.layout === "fit" && (S.settings?.layout === "split") && c.source_kind === "twitch" && !c.facecam ? `<div class="hint" style="margin-top:6px">No facecam was found in this clip, so it uses Fit. Set the facecam area to switch it to Split.</div>` : ""}
+    </div>
+    <div class="why"><p>${why}</p><ul>${(c.chat_sample || []).slice(-5).map(m => `<li>${esc(m)}</li>`).join("")}</ul></div>
+    <div class="field"><label for="fTitle"><span>Title</span>${S.state?.claude ? `<button class="linkbtn" onclick="suggestTitles(this)">Suggest titles</button>` : ""}</label>
+      <input id="fTitle" value="${esc(c.title)}" maxlength="100">
+      <div class="suggest" id="sugg"></div></div>
+    <div class="field"><label for="fCap"><span>Caption</span><span class="num" id="capN"></span></label><textarea id="fCap">${esc(c.caption)}</textarea></div>
+    ${c.transcript ? `<div class="field"><label><span>What they said</span></label><div class="hint" style="color:var(--muted);font-size:13.5px">${esc(c.transcript)}</div></div>` : ""}
+    <div><div class="field"><label><span>Post to</span>${plats.some(p => !p.connected) ? `<button class="linkbtn" onclick="go('settings')">Connect accounts</button>` : ""}</label></div>
+      <div class="plats" id="plats">${plats.map(p => `<button class="plat ${S.chosen.has(p.name) ? "on" : ""}" data-p="${p.name}" ${p.connected ? "" : "disabled title='Connect in Settings first'"} onclick="togglePlat('${p.name}')"><span class="box">${S.chosen.has(p.name) ? "✓" : ""}</span>${PLAT[p.name]}</button>`).join("")}</div></div>
+    <div class="posts" id="posts"></div>
+  </div>
+  <div class="actions" id="actions"></div>`;
+  const v = $("#vid");
+  v.addEventListener("timeupdate", drawHeat);
+  $("#fTitle").addEventListener("input", e => { const old = S.clip.title; S.clip.title = e.target.value;
+    const cap = $("#fCap"); if (old && cap.value.includes(old)) { cap.value = cap.value.replace(old, e.target.value); S.clip.caption = cap.value; } capCount(); });
+  $("#fCap").addEventListener("input", e => { S.clip.caption = e.target.value; capCount(); });
+  capCount(); drawHeat(); renderPosts(); renderActions(); setupHeatDrag();
+}
+function capCount() { const n = $("#fCap")?.value.length || 0; const el = $("#capN"); if (el) el.textContent = n > 2200 ? `${n}/2200, too long for Instagram/TikTok` : `${n}`; }
+window.closeReview = () => { $("#review").classList.remove("open"); };
+window.togglePlat = n => { S.chosen.has(n) ? S.chosen.delete(n) : S.chosen.add(n);
+  localStorage.setItem("cw.plats", JSON.stringify([...S.chosen]));
+  document.querySelectorAll(".plat").forEach(b => { const on = S.chosen.has(b.dataset.p);
+    b.classList.toggle("on", on); b.querySelector(".box").textContent = on ? "✓" : ""; });
+  renderActions(); };
+function renderActions() {
+  const a = $("#actions"), c = S.clip; if (!a || !c) return;
+  if (c.status === "pending") {
+    const n = S.chosen.size;
+    a.innerHTML = `<button class="btn" onclick="reject()">Reject<span class="kbd">X</span></button>
+      <button class="btn primary" onclick="approve()" ${S.busy ? "disabled" : ""}>${n ? `Approve and post to ${n}` : "Approve"}<span class="kbd">A</span></button>`;
+  } else if (c.status === "approved") {
+    const missing = [...S.chosen].filter(p => !(c.posts || []).some(x => x.platform === p && x.status !== "failed"));
+    a.innerHTML = `<button class="btn" onclick="restore()">Move back to review</button>
+      ${missing.length ? `<button class="btn primary" onclick="approve()">Also post to ${missing.map(p => PLAT[p]).join(", ")}</button>` : `<button class="btn primary" onclick="saveText()">Save title and caption</button>`}`;
+  } else {
+    a.innerHTML = `<button class="btn" onclick="delClip()">Delete for good</button><button class="btn primary" onclick="restore()">Move back to review</button>`;
+  }
+}
+function renderPosts() {
+  const el = $("#posts"); if (!el) return;
+  const ps = S.clip?.posts || [];
+  el.innerHTML = ps.map(p => {
+    const label = {queued: "Waiting to upload", uploading: "Uploading…", posted: "Posted", failed: "Failed"}[p.status];
+    return `<div class="post"><div class="row"><span>${PLAT[p.platform]}</span><span class="st ${p.status}">${label}</span></div>
+      ${p.url ? `<div class="msg"><a href="${esc(p.url)}" target="_blank" rel="noopener">Open on ${PLAT[p.platform]}</a></div>` : ""}
+      ${p.note ? `<div class="msg">${esc(p.note)}</div>` : ""}
+      ${p.error ? `<div class="msg">${esc(p.error)}</div><div class="msg"><button class="linkbtn" onclick="retry(${p.id})">Try again</button></div>` : ""}</div>`;
+  }).join("");
+  renderActions();
+}
+
+/* heat strip: chat energy over the clip's raw footage, with trim handles */
+function heatDomain() {
+  const c = S.clip, pts = c.heat?.points || [];
+  const vidEnd = (c.trim_start || 0) + (c.duration || 0);
+  return Math.max(pts.length ? pts.at(-1)[0] : 0, vidEnd, (c.heat?.spike || 0) + 5, 1);
+}
+function drawHeat() {
+  const box = $("#heat"); if (!box || !S.clip) return;
+  const c = S.clip, D = heatDomain(), W = 1000, H = 74;
+  const pts = c.heat?.points || [], base = c.heat?.baseline ?? c.baseline ?? 0;
+  const max = Math.max(...pts.map(p => p[1]), c.heat?.label ? 0 : (c.score || 0), base * 1.5, 1) * 1.1;
+  const X = t => (t / D * W), Y = v => H - (v / max) * (H - 6) - 3;
+  const ts = S.trim.start, te = S.trim.end ?? D;
+  const v = $("#vid"), ph = v ? (c.trim_start || 0) + (v.currentTime || 0) : null;
+  let area = "";
+  if (pts.length > 1) {
+    const line = pts.map(p => `${X(p[0]).toFixed(1)},${Y(p[1]).toFixed(1)}`).join(" L");
+    area = `<path d="M${X(pts[0][0]).toFixed(1)},${H} L${line} L${X(pts.at(-1)[0]).toFixed(1)},${H} Z" fill="rgba(242,179,61,.22)"/>
+            <path d="M${line}" fill="none" stroke="#f2b33d" stroke-width="2" vector-effect="non-scaling-stroke"/>`;
+  }
+  box.innerHTML = `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="Chat activity across the clip">
+    ${area}
+    <line x1="0" x2="${W}" y1="${Y(base)}" y2="${Y(base)}" stroke="#6f6880" stroke-dasharray="4 5" stroke-width="1" vector-effect="non-scaling-stroke"/>
+    ${c.heat?.spike != null ? `<line x1="${X(c.heat.spike)}" x2="${X(c.heat.spike)}" y1="0" y2="${H}" stroke="#e5484d" stroke-width="1.5" vector-effect="non-scaling-stroke"/>` : ""}
+    <rect x="0" y="0" width="${X(ts)}" height="${H}" fill="rgba(30,27,36,.78)"/>
+    <rect x="${X(te)}" y="0" width="${W - X(te)}" height="${H}" fill="rgba(30,27,36,.78)"/>
+    ${ph != null ? `<line x1="${X(ph)}" x2="${X(ph)}" y1="0" y2="${H}" stroke="#ede8f2" stroke-width="1.5" vector-effect="non-scaling-stroke"/>` : ""}
+  </svg><div class="h" data-h="start" style="left:${ts/D*100}%" role="slider" tabindex="0" aria-label="Clip start" aria-valuenow="${ts.toFixed(1)}"></div>
+  <div class="h" data-h="end" style="left:${te/D*100}%" role="slider" tabindex="0" aria-label="Clip end" aria-valuenow="${te.toFixed(1)}"></div>`;
+}
+function trimChanged() {
+  const c = S.clip, D = heatDomain();
+  const changed = Math.abs(S.trim.start - (c.trim_start || 0)) > .2 || Math.abs((S.trim.end ?? D) - (c.trim_end ?? D)) > .2
+                  || (S.layout && S.layout !== (c.layout || S.settings?.layout));
+  const b = $("#applyBtn"); if (b) b.hidden = !changed;
+}
+function setupHeatDrag() {
+  const box = $("#heat"); let drag = null;
+  const pos = e => { const r = box.getBoundingClientRect(); return Math.max(0, Math.min(1, (e.clientX - r.left) / r.width)) * heatDomain(); };
+  box.addEventListener("pointerdown", e => { const h = e.target.closest(".h"); if (!h) {
+      const v = $("#vid"); const t = pos(e) - (S.clip.trim_start || 0);
+      if (v && t >= 0 && t <= v.duration) v.currentTime = t; return; }
+    drag = h.dataset.h; box.setPointerCapture(e.pointerId); });
+  box.addEventListener("pointermove", e => { if (!drag) return; const t = pos(e), D = heatDomain();
+    if (drag === "start") S.trim.start = Math.min(t, (S.trim.end ?? D) - 3);
+    else S.trim.end = Math.max(t, S.trim.start + 3);
+    drawHeat(); trimChanged(); });
+  box.addEventListener("pointerup", () => drag = null);
+  box.addEventListener("keydown", e => { const h = e.target.closest(".h"); if (!h || !["ArrowLeft","ArrowRight"].includes(e.key)) return;
+    e.preventDefault(); const d = e.key === "ArrowLeft" ? -0.5 : 0.5, D = heatDomain();
+    if (h.dataset.h === "start") S.trim.start = Math.max(0, Math.min(S.trim.start + d, (S.trim.end ?? D) - 3));
+    else S.trim.end = Math.min(D, Math.max((S.trim.end ?? D) + d, S.trim.start + 3));
+    drawHeat(); trimChanged(); $(`.h[data-h="${h.dataset.h}"]`)?.focus(); });
+}
+const LAYOUT_LABELS = {split: "Split", auto: "Auto", fit: "Fit", crop: "Crop", original: "16:9"};
+window.setLayout = k => { S.layout = k; document.querySelectorAll(".layout-row .seg button").forEach(b => b.classList.toggle("on", b.dataset.l === k));
+  const fb = $("#fcBtn"); if (fb) fb.hidden = k !== "split"; trimChanged(); };
+
+/* facecam editor: drag the box onto the streamer's webcam, resize from the corners */
+window.openFacecam = async () => {
+  const c = S.clip; if (!c) return;
+  const box = {...(c.facecam || c.channel_facecam || {x: 0.7, y: 0.6, w: 0.28, h: 0.33})};
+  const back = document.createElement("div"); back.className = "fc-back";
+  back.innerHTML = `<div class="fc" role="dialog" aria-modal="true" aria-labelledby="fcT">
+    <h3 id="fcT">Facecam area</h3>
+    <p>Drag the box onto the streamer's webcam and resize it from the corners. This part goes on top; the middle of the gameplay goes below.</p>
+    <div class="fc-stage" id="fcStage"><img id="fcImg" alt="Frame from this clip" src="/api/clips/${c.id}/frame?ts=${Date.now()}"><div class="fc-box" id="fcBox"><i class="rz nw"></i><i class="rz ne"></i><i class="rz sw"></i><i class="rz se"></i></div></div>
+    <div class="fc-foot"><label><input type="checkbox" id="fcSave" checked> Use this area for all clips from ${esc(c.channel)}</label>
+      <span class="btns"><button class="btn" id="fcDetect">Find it automatically</button><button class="btn" id="fcCancel">Cancel</button><button class="btn primary" id="fcApply" style="flex:none">Apply</button></span></div></div>`;
+  document.body.appendChild(back);
+  const stage = $("#fcStage"), el = $("#fcBox");
+  const draw = () => Object.assign(el.style, {left: box.x*100+"%", top: box.y*100+"%", width: box.w*100+"%", height: box.h*100+"%"});
+  draw();
+  let drag = null;
+  el.addEventListener("pointerdown", e => { e.preventDefault(); const r = stage.getBoundingClientRect();
+    drag = {mode: e.target.classList.contains("rz") ? ["nw","ne","sw","se"].find(x => e.target.classList.contains(x)) : "move",
+            px: e.clientX, py: e.clientY, b: {...box}, W: r.width, H: r.height}; el.setPointerCapture(e.pointerId); });
+  el.addEventListener("pointermove", e => { if (!drag) return;
+    const dx = (e.clientX - drag.px) / drag.W, dy = (e.clientY - drag.py) / drag.H, b = drag.b, m = drag.mode, min = 0.05;
+    if (m === "move") { box.x = Math.min(Math.max(b.x + dx, 0), 1 - b.w); box.y = Math.min(Math.max(b.y + dy, 0), 1 - b.h); }
+    else {
+      let x0 = b.x, y0 = b.y, x1 = b.x + b.w, y1 = b.y + b.h;
+      if (m.includes("w")) x0 = Math.min(Math.max(x0 + dx, 0), x1 - min); else x1 = Math.max(Math.min(x1 + dx, 1), x0 + min);
+      if (m.includes("n")) y0 = Math.min(Math.max(y0 + dy, 0), y1 - min); else y1 = Math.max(Math.min(y1 + dy, 1), y0 + min);
+      Object.assign(box, {x: x0, y: y0, w: x1 - x0, h: y1 - y0});
+    }
+    draw(); });
+  el.addEventListener("pointerup", () => drag = null);
+  const close = () => { back.remove(); document.removeEventListener("keydown", onKey); };
+  const onKey = e => { if (e.key === "Escape") close(); };
+  document.addEventListener("keydown", onKey);
+  $("#fcCancel").onclick = close;
+  const run = async (body, label) => {
+    const btn = label === "detect" ? $("#fcDetect") : $("#fcApply"); btn.disabled = true; btn.textContent = "Rendering…";
+    try {
+      const D = heatDomain(); const end = S.trim.end != null && S.trim.end < D - .2 ? S.trim.end : null;
+      const nc = await api(`/api/clips/${c.id}/render`, {method: "POST", body: {start: S.trim.start, end, layout: "split", ...body}});
+      S.clip = {...nc, title: S.clip.title, caption: S.clip.caption}; S.layout = null; close(); renderReview(); loadClips();
+      toast(nc.layout === "split" ? (body.save_for_channel ? `Saved for ${c.channel}. Clip re-rendered` : "Clip re-rendered") : "No facecam found. Draw the area yourself");
+    } catch (e) { toast(e.message, true); btn.disabled = false; btn.textContent = label === "detect" ? "Find it automatically" : "Apply"; }
+  };
+  $("#fcApply").onclick = () => run({facecam: {x: box.x, y: box.y, w: box.w, h: box.h}, save_for_channel: $("#fcSave").checked}, "apply");
+  $("#fcDetect").onclick = () => run({redetect: true}, "detect");
+};
+window.applyRender = async () => {
+  const b = $("#applyBtn"); b.disabled = true; b.textContent = "Rendering…";
+  try {
+    const D = heatDomain(); const end = S.trim.end != null && S.trim.end < D - .2 ? S.trim.end : null;
+    const c = await api(`/api/clips/${S.clip.id}/render`, {method: "POST", body: {start: S.trim.start, end, layout: S.layout || S.clip.layout || S.settings?.layout}});
+    const keep = {title: S.clip.title, caption: S.clip.caption};
+    S.clip = {...c, ...keep}; S.trim = {start: c.trim_start || 0, end: c.trim_end};
+    renderReview(); loadClips(); toast("Clip re-rendered");
+  } catch (e) { toast(e.message, true); b.disabled = false; b.textContent = "Apply"; }
+};
+window.suggestTitles = async btn => {
+  btn.textContent = "Thinking…";
+  try { const r = await api(`/api/clips/${S.clip.id}/suggest`, {method: "POST"});
+    $("#sugg").innerHTML = r.titles.map(t => `<button>${esc(t)}</button>`).join("");
+    $("#sugg").querySelectorAll("button").forEach(b => b.onclick = () => { const i = $("#fTitle"); i.value = b.textContent; i.dispatchEvent(new Event("input")); });
+  } catch (e) { toast(e.message, true); }
+  btn.textContent = "Suggest titles";
+};
+
+/* actions */
+function nextPending() { const i = S.clips.findIndex(c => c.id === S.sel); return S.clips[i + 1]?.id ?? S.clips[i - 1]?.id ?? null; }
+window.approve = async () => {
+  if (S.busy) return; S.busy = true; renderActions();
+  const id = S.sel, next = S.tab === "pending" ? nextPending() : id;
+  try {
+    await api(`/api/clips/${id}/approve`, {method: "POST", body: {platforms: [...S.chosen], title: $("#fTitle").value, caption: $("#fCap").value}});
+    toast(S.chosen.size ? `Approved. Posting to ${[...S.chosen].map(p => PLAT[p]).join(", ")}` : "Approved");
+    await loadClips(); loadState(); await select(next);
+  } catch (e) { toast(e.message, true); }
+  S.busy = false; renderActions();
+};
+window.reject = async () => { const id = S.sel, next = nextPending();
+  await api(`/api/clips/${id}/reject`, {method: "POST"}); toast("Rejected"); await loadClips(); loadState(); select(next); };
+window.restore = async () => { await api(`/api/clips/${S.sel}/restore`, {method: "POST"}); toast("Moved back to review"); await loadClips(); loadState(); select(null); };
+window.delClip = async () => { if (!confirm("Delete this clip and its files?")) return;
+  await api(`/api/clips/${S.sel}`, {method: "DELETE"}); toast("Deleted"); await loadClips(); loadState(); select(null); };
+window.saveText = async () => { await api(`/api/clips/${S.sel}`, {method: "PATCH", body: {title: $("#fTitle").value, caption: $("#fCap").value}}); toast("Saved"); loadClips(); };
+window.retry = async id => { await api(`/api/posts/${id}/retry`, {method: "POST"}); toast("Trying again"); refreshClip(); };
+
+/* ---------------- import ---------------- */
+const IMP = {length: "medium", count: "auto", layout: "", language: ""};
+try { Object.assign(IMP, JSON.parse(localStorage.getItem("cw.imp") || "{}")); } catch {}
+function renderImport() {
+  const opt = (k, label, opts) => `<div class="field"><label for="i-${k}"><span>${label}</span></label><select id="i-${k}" onchange="IMP['${k}']=this.value;localStorage.setItem('cw.imp',JSON.stringify(IMP))">${opts.map(([v,l]) => `<option value="${v}" ${String(IMP[k])===v?"selected":""}>${l}</option>`).join("")}</select></div>`;
+  const finder = S.state?.claude ? "Claude Code reads the whole transcript and picks the moments with the strongest hook and payoff, using YouTube's \"Most replayed\" graph and chat replays as hints."
+    : "Claude Code isn't set up, so moments are picked from YouTube's \"Most replayed\" graph, chat replays and loudness. Set CLAUDE_CODE_OAUTH_TOKEN for much better picks.";
+  $("#main").innerHTML = `<div class="qhead"><h1 class="qtitle">Import a video<small>Turn a long video into short clips, ready to review and post</small></h1></div>
+  <div class="imp"><div class="imp-box">
+    <form class="imp-url" onsubmit="event.preventDefault();startImport()"><input id="impUrl" type="url" placeholder="Paste a YouTube link" aria-label="Video link" autocomplete="off"><button class="btn primary" id="impGo">Find clips</button></form>
+    <div class="imp-or">or <label for="impFile">upload a video file</label><input id="impFile" type="file" accept="video/*" hidden onchange="uploadImport(this.files[0])"><span id="upProg"></span></div>
+    <div class="imp-opts">
+      ${opt("length", "Clip length", [["short","Short, 15–35 s"],["medium","Medium, 30–60 s"],["long","Long, 55–90 s"]])}
+      ${opt("count", "Number of clips", [["auto","Auto"],["3","3"],["5","5"],["10","10"],["15","15"]])}
+      ${opt("layout", "Layout", [["","Default (" + ({split:"Split",auto:"Auto",fit:"Fit",crop:"Crop",original:"Original"}[S.settings?.import_layout] || "Auto") + ")"],["split","Split: facecam on top"],["auto","Auto: follows faces"],["fit","Fit: blurred background"],["crop","Crop: center"],["original","Original"]])}
+      ${opt("language", "Language", [["","Detect automatically"],["en","English"],["id","Indonesian"],["de","German"]])}
+    </div>
+    <p class="imp-note">${finder} Long videos take a while: transcribing runs on your computer.</p>
+  </div><div class="jobs" id="jobs"></div></div>`;
+  loadJobs();
+}
+async function loadJobs() {
+  try { S.jobs = await api("/api/imports"); } catch { return; }
+  const el = $("#jobs"); if (!el) return;
+  if (!S.jobs.length) { el.innerHTML = ""; return; }
+  const dur = d => d ? (d >= 3600 ? `${Math.floor(d/3600)} h ${Math.round(d%3600/60)} min` : `${Math.round(d/60)} min`) : "";
+  el.innerHTML = S.jobs.map(j => {
+    const active = !["done","failed","cancelled"].includes(j.status);
+    const pct = j.status === "rendering" || j.status === "downloading" || j.status === "transcribing" ? Math.round(j.progress * 100) : null;
+    const cls = j.status === "failed" ? "failed" : j.status === "done" ? "done" : "";
+    const finder = j.finder === "claude" ? "picked by Claude Code" : j.finder === "heuristic" ? "picked from signals" : "";
+    return `<div class="job"><div class="job-top"><div style="min-width:0"><div class="job-title">${esc(j.title || j.url || "Video")}</div>
+      <div class="job-sub">${esc([j.channel, dur(j.duration), finder].filter(Boolean).join(" · "))}</div></div>
+      <div class="job-actions">${j.status === "done" && j.clips ? `<button class="btn primary" style="padding:7px 12px;font-size:14px" onclick="reviewJob(${j.id})">Review ${j.clips} clips</button>` : ""}
+        ${active && j.status !== "uploading" ? `<button class="chip-btn" onclick="jobAct(${j.id},'cancel')">Cancel</button>` : ""}
+        ${["failed","cancelled"].includes(j.status) ? `<button class="chip-btn" onclick="jobAct(${j.id},'retry')">Try again</button>` : ""}
+        ${!active ? `<button class="chip-btn" onclick="jobAct(${j.id},'delete')" aria-label="Remove from list">Remove</button>` : ""}</div></div>
+      <div class="job-step ${cls}"><span>${esc(j.step || j.status)}${j.status === "rendering" && j.clips ? ` · ${j.clips} done` : ""}</span>${pct != null && active ? `<span class="num">${pct}%</span>` : ""}</div>
+      ${active ? `<div class="bar"><i style="width:${Math.max(3, Math.round((j.progress || 0) * 100))}%"></i></div>` : ""}
+      ${j.error ? `<div class="job-err">${esc(j.error)}</div>` : ""}</div>`;
+  }).join("");
+}
+function impBody() { return {length: IMP.length, count: IMP.count, layout: IMP.layout || null, language: IMP.language || null}; }
+window.startImport = async () => {
+  const i = $("#impUrl"), url = i.value.trim(); if (!url) return i.focus();
+  try { await api("/api/imports", {method: "POST", body: {url, ...impBody()}}); i.value = ""; toast("Added. Downloading the video"); loadJobs(); loadState(); }
+  catch (e) { toast(e.message, true); }
+};
+window.uploadImport = file => {
+  if (!file) return;
+  const fd = new FormData(); fd.append("file", file); fd.append("options", JSON.stringify(impBody()));
+  const xhr = new XMLHttpRequest(); xhr.open("POST", "/api/imports/upload");
+  xhr.upload.onprogress = e => { if (e.lengthComputable) $("#upProg").textContent = `Uploading ${file.name}: ${Math.round(e.loaded / e.total * 100)}%`; };
+  xhr.onload = () => { $("#upProg").textContent = ""; $("#impFile").value = "";
+    if (xhr.status < 300) { toast("Uploaded. Finding clips"); loadJobs(); } else toast("Upload failed", true); };
+  xhr.onerror = () => { $("#upProg").textContent = ""; toast("Upload failed. Check your connection", true); };
+  xhr.send(fd);
+};
+window.jobAct = async (id, act) => {
+  if (act === "delete") { await api(`/api/imports/${id}`, {method: "DELETE"}); toast("Removed. Its clips stay in the queue"); }
+  else { await api(`/api/imports/${id}/${act}`, {method: "POST"}); toast(act === "cancel" ? "Cancelled" : "Trying again"); }
+  loadJobs(); loadState();
+};
+window.reviewJob = id => { const j = S.jobs.find(x => x.id === id); S.job = j; S.channel = ""; S.tab = "pending"; go("queue"); if (S.view === "queue") showView(); };
+
+/* ---------------- settings ---------------- */
+async function renderSettings() {
+  S.settings = await api("/api/settings");
+  const s = S.settings, plats = S.state?.platforms || [];
+  const uris = Object.fromEntries(await Promise.all(plats.map(async p => [p.name, (await api(`/api/platforms/${p.name}/redirect-uri`)).redirect_uri])));
+  const guide = {
+    youtube: `Create a project, enable <b>YouTube Data API v3</b>, set up the OAuth consent screen (add yourself as a test user), then create an OAuth client of type <b>Web application</b>.`,
+    instagram: `Create a Meta app with the <b>Instagram</b> product and use <b>API setup with Instagram login</b>. Your Instagram account must be a Business or Creator account. Use the Instagram app ID and secret.`,
+    tiktok: `Create an app, add <b>Login Kit</b> and <b>Content Posting API</b>. Use the client key as the ID. TikTok only accepts HTTPS redirect addresses, so set the studio's public address below first.`,
+  };
+  const warn = {
+    youtube: "Until your Google Cloud project passes YouTube's API audit, uploads may be locked to private. Tokens for apps in Testing mode expire after 7 days, so you may need to reconnect weekly.",
+    instagram: "Instagram downloads the video from the studio, so the studio needs a public HTTPS address (set below).",
+    tiktok: "Inbox mode works right away: each clip lands in your TikTok inbox as a draft and you tap Post. Direct posting stays private until TikTok audits your app.",
+  };
+  $("#main").innerHTML = `<div class="qhead"><h1 class="qtitle">Settings</h1></div><div class="settings">
+    <section><h2>Accounts</h2><p class="lead">Approving a clip posts it to every account you tick. Each platform needs a developer app of your own. It's free and takes about 10 minutes each.</p>
+    ${plats.map(p => `<div class="acct"><div class="acct-head"><h3>${p.label}</h3>
+        ${p.connected ? `<span class="who ok">Connected as ${esc(p.account)}${p.demo ? "" : ` · <button class="linkbtn" onclick="disconnect('${p.name}')">Disconnect</button>`}</span>`
+          : p.configured ? `<a class="btn primary" style="flex:none;text-decoration:none" href="/auth/${p.name}/start">Connect ${PLAT[p.name]}</a>` : `<span class="who">Not set up</span>`}</div>
+      ${p.demo ? "" : `<ol><li><a href="${p.setup_url}" target="_blank" rel="noopener">Open the developer console</a>. ${guide[p.name]}</li>
+        <li>Add this as an allowed redirect URL:<div class="copy"><code>${esc(uris[p.name])}</code><button class="chip-btn" onclick="navigator.clipboard.writeText('${esc(uris[p.name])}');toast('Copied')">Copy</button></div></li>
+        <li>Paste the app's ID and secret, save, then connect.
+          <div class="form2" style="margin-top:8px"><div class="field"><input id="cid-${p.name}" placeholder="${p.name === "tiktok" ? "Client key" : "Client ID / App ID"}" value="${esc(p.client_id)}" aria-label="Client ID"></div>
+          <div class="field"><input id="sec-${p.name}" type="password" placeholder="${p.configured ? "Secret saved (leave empty to keep)" : "Client secret"}" aria-label="Client secret"></div></div>
+          <button class="chip-btn" style="margin-top:8px" onclick="saveCred('${p.name}')">Save</button></li></ol>
+        <div class="note">${warn[p.name]}</div>`}</div>`).join("")}
+    </section>
+    <section><h2>Clips</h2><p class="lead">These apply to new clips. Each channel can override sensitivity from its Edit menu.</p>
+      <div class="form2">
+        ${sel("layout", "Layout for Twitch clips", [["split","Split: facecam on top, gameplay below"],["auto","Auto: 9:16 that follows the speaker's face"],["fit","Fit: whole frame on a blurred 9:16 background"],["crop","Crop: center of the frame, 9:16"],["original","Original 16:9"]])}
+        <div class="field"><label><span>&nbsp;</span></label><button class="chip-btn" style="padding:8px 12px" onclick="bulkRender('layout','twitch')">Use this layout for Twitch clips waiting for review</button></div>
+        ${sel("captions", "Captions", [[true,"Burn in captions"],[false,"No captions"]])}
+        ${num("ratio", "Spike sensitivity", "Chat must be this many times busier than the last 5 minutes", 0.5)}
+        ${num("min_score", "Minimum reaction", "At least this many chatters reacting at once", 1)}
+        ${num("pre_roll", "Seconds before the spike", "Chat reacts after the moment, so keep this longer", 1)}
+        ${num("post_roll", "Seconds after the spike", "", 1)}
+        ${sel("whisper_model", "Caption accuracy", [["base","Fast"],["small","Balanced"],["medium","Accurate (slow on CPU)"],["large-v3","Best (needs a strong machine)"]])}
+        ${txt("language", "Caption language", "Empty = detect automatically. Or en, de, id…")}
+        ${num("cooldown", "Gap between clips", "Seconds before the same channel can clip again", 5)}
+        ${sel("quality", "Recording quality", [["best","Best available"],["1080p60","1080p60"],["720p60","720p60 (saves disk)"],["480p","480p"]])}
+      </div></section>
+    <section><h2>Posting</h2>
+      <div class="form2">
+        <div class="field wide"><label for="s-caption_template"><span>Default caption</span><span>{title} and {channel} are filled in</span></label><textarea id="s-caption_template" onchange="saveSetting('caption_template', this.value)">${esc(s.caption_template)}</textarea></div>
+        ${sel("youtube_privacy", "YouTube visibility", [["public","Public"],["unlisted","Unlisted"],["private","Private"]])}
+        ${sel("tiktok_mode", "TikTok posting", [["inbox","Send to TikTok inbox as a draft"],["direct","Post directly (needs an audited app)"]])}
+        ${sel("tiktok_privacy", "TikTok visibility for direct posts", [["SELF_ONLY","Only me"],["MUTUAL_FOLLOW_FRIENDS","Friends"],["FOLLOWER_OF_CREATOR","Followers"],["PUBLIC_TO_EVERYONE","Everyone"]])}
+      </div></section>
+    <section><h2>Imports</h2><p class="lead">Defaults for videos you import from a link or upload.</p>
+      <div class="form2">${sel("import_layout", "Layout for imported videos", [["split","Split: facecam on top, content below"],["auto","Auto: follows the speaker's face"],["fit","Fit: whole frame on a blurred background"],["crop","Crop: center 9:16"],["original","Original"]])}
+        <div class="field"><label><span>&nbsp;</span></label><button class="chip-btn" style="padding:8px 12px" onclick="bulkRender('import_layout','video')">Use this layout for imported clips waiting for review</button></div>
+        ${txt("ytdlp_cookies", "YouTube cookies file", "Only if downloads fail with \"confirm you're not a bot\". Path inside the data folder, e.g. /data/cookies.txt")}</div></section>
+    <section><h2>Studio address</h2><p class="lead">The public HTTPS address of this studio. Instagram downloads approved videos from it, and the platforms send you back here after you connect an account.</p>
+      <div class="form2">${txt("public_url", "Public address", "e.g. https://studio.yourdomain.com. Leave empty if you only use it locally")}
+        ${num("keep_recordings_hours", "Keep full recordings for (hours)", "Clips keep their own footage, so recordings can go quickly", 1)}</div></section>
+  </div>`;
+  const qs = new URLSearchParams(location.hash.split("?")[1] || "");
+  if (qs.get("connected")) toast(`${PLAT[qs.get("connected")]} connected`);
+  if (qs.get("error")) toast(`Couldn't connect: ${qs.get("error")}`, true);
+  if (qs.toString()) history.replaceState(null, "", "#settings");
+}
+function sel(k, label, opts) { const v = S.settings[k];
+  return `<div class="field"><label for="s-${k}"><span>${label}</span></label><select id="s-${k}" onchange="saveSetting('${k}', this.value === 'true' ? true : this.value === 'false' ? false : this.value)">${opts.map(([o,l]) => `<option value="${o}" ${String(v)===String(o)?"selected":""}>${l}</option>`).join("")}</select></div>`; }
+function num(k, label, hint, step) { return `<div class="field"><label for="s-${k}"><span>${label}</span></label><input id="s-${k}" type="number" step="${step}" value="${S.settings[k]}" onchange="saveSetting('${k}', this.value)">${hint ? `<div class="hint">${hint}</div>` : ""}</div>`; }
+function txt(k, label, hint) { return `<div class="field"><label for="s-${k}"><span>${label}</span></label><input id="s-${k}" value="${esc(S.settings[k])}" onchange="saveSetting('${k}', this.value.trim())">${hint ? `<div class="hint">${hint}</div>` : ""}</div>`; }
+window.bulkRender = async (key, kind) => {
+  const layout = S.settings[key];
+  try { const r = await api("/api/clips/rerender", {method: "POST", body: {layout, source_kind: kind}});
+    toast(r.queued ? `Re-rendering ${r.queued} clips in the background` : "All those clips already use this layout"); loadState();
+  } catch (e) { toast(e.message, true); }
+};
+window.saveSetting = async (k, v) => { try { S.settings = await api("/api/settings", {method: "PATCH", body: {[k]: v}}); toast("Saved");
+  if (k === "public_url") renderSettings(); } catch (e) { toast(e.message, true); } };
+window.saveCred = async n => { await api(`/api/platforms/${n}/cred`, {method: "PUT", body: {client_id: $(`#cid-${n}`).value, client_secret: $(`#sec-${n}`).value}});
+  toast("Saved. Now press Connect"); await loadState(); renderSettings(); };
+window.disconnect = async n => { await api(`/api/platforms/${n}/disconnect`, {method: "POST"}); toast(`${PLAT[n]} disconnected`); await loadState(); renderSettings(); };
+
+/* ---------------- routing + keys ---------------- */
+window.go = v => { location.hash = v === "settings" ? "settings" : v === "import" ? "import" : ""; };
+document.querySelectorAll("[data-go]").forEach(b => b.onclick = () => { if (b.dataset.go === "queue") { S.channel = ""; S.job = null; } go(b.dataset.go); if (b.dataset.go === "queue" && S.view === "queue") showView(); });
+function route() { S.view = location.hash.startsWith("#settings") ? "settings" : location.hash.startsWith("#import") ? "import" : "queue"; showView(); }
+window.addEventListener("hashchange", route);
+document.addEventListener("keydown", e => {
+  if (S.view !== "queue" || e.target.closest("input,textarea,select") || e.metaKey || e.ctrlKey) return;
+  const i = S.clips.findIndex(c => c.id === S.sel);
+  if (e.key === "j" || e.key === "ArrowDown") { e.preventDefault(); if (S.clips[i + 1]) select(S.clips[i + 1].id); else if (i < 0 && S.clips[0]) select(S.clips[0].id); }
+  else if (e.key === "k" || e.key === "ArrowUp") { e.preventDefault(); if (i > 0) select(S.clips[i - 1].id); }
+  else if (e.key === "a" && S.clip?.status === "pending") approve();
+  else if (e.key === "x" && S.clip?.status === "pending") reject();
+  else if (e.key === " " && $("#vid")) { e.preventDefault(); const v = $("#vid"); v.paused ? v.play() : v.pause(); }
+  else if (e.key === "Escape") closeReview();
+});
+
+(async () => {
+  S.settings = await api("/api/settings").catch(() => null);
+  await loadState(); route(); renderReview();
+  setInterval(loadState, 4000);
+  setInterval(() => { if (S.view === "queue") loadClips(); refreshClip(); }, 6000);
+  setInterval(() => { if (S.view === "import") loadJobs(); }, 2500);
+})();
+</script>
+</body>
+</html>
