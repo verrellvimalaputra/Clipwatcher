@@ -42,6 +42,13 @@ CREATE TABLE IF NOT EXISTS posts (
     UNIQUE(clip_id, platform)
 );
 CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS brands (             -- one set of YouTube/Instagram/TikTok accounts to post to
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    language TEXT NOT NULL DEFAULT '',           -- default speech language for its channels ('' = detect)
+    caption_template TEXT,                       -- NULL = the global caption template
+    handle TEXT NOT NULL DEFAULT ''              -- our page's handle shown small on the video, '' = none
+);
 CREATE TABLE IF NOT EXISTS ai_usage (           -- Claude Code calls per local day and task
     day TEXT NOT NULL, task TEXT NOT NULL, model TEXT NOT NULL DEFAULT '',
     calls INTEGER NOT NULL DEFAULT 0, failed INTEGER NOT NULL DEFAULT 0,
@@ -73,7 +80,8 @@ DEFAULT_SETTINGS = {
     "tiktok_privacy": "SELF_ONLY",
     "keep_recordings_hours": 48,
     "context_overlay": True,
-    "ai_review": True,          # a second Claude pass scores each clip 0-10 (interesting, funny, clear)    # show each clip's context line on the video for the first seconds
+    "ai_review": True,
+    "credit_overlay": True,     # streamer credit (+ the brand's handle, smaller) on the video the whole clip          # a second Claude pass scores each clip 0-10 (interesting, funny, clear)    # show each clip's context line on the video for the first seconds
     "import_layout": "auto",    # default layout for imported videos (talking heads, podcasts)
     "ytdlp_cookies": "",        # path to a cookies.txt if YouTube asks to "confirm you're not a bot"
     "public_url": "",           # https://studio.example.com, needed for Instagram + OAuth redirects
@@ -91,16 +99,25 @@ class DB:
 
     def _migrate(self):
         """Add columns introduced after a DB was first created."""
-        if "mode" not in {r["name"] for r in self.q("PRAGMA table_info(jobs)")}:
+        have_jobs = {r["name"] for r in self.q("PRAGMA table_info(jobs)")}
+        if "mode" not in have_jobs:
             self.x("ALTER TABLE jobs ADD COLUMN mode TEXT")
+        if "brand" not in have_jobs:
+            self.x("ALTER TABLE jobs ADD COLUMN brand INTEGER NOT NULL DEFAULT 1")
+        if "handle" not in {r["name"] for r in self.q("PRAGMA table_info(brands)")}:
+            self.x("ALTER TABLE brands ADD COLUMN handle TEXT NOT NULL DEFAULT ''")
+        if not self.q("SELECT id FROM brands WHERE id=1"):  # existing accounts become brand 1
+            self.x("INSERT INTO brands(id, name) VALUES(1, 'Main')")
         have_ch = {r["name"] for r in self.q("PRAGMA table_info(channels)")}
-        for col, ddl in [("platform", "TEXT NOT NULL DEFAULT 'twitch'"), ("url", "TEXT"), ("label", "TEXT")]:
+        for col, ddl in [("platform", "TEXT NOT NULL DEFAULT 'twitch'"), ("url", "TEXT"), ("label", "TEXT"),
+                         ("brand", "INTEGER NOT NULL DEFAULT 1")]:
             if col not in have_ch:
                 self.x(f"ALTER TABLE channels ADD COLUMN {col} {ddl}")
         have = {r["name"] for r in self.q("PRAGMA table_info(clips)")}
         for col, ddl in [("source_kind", "TEXT NOT NULL DEFAULT 'twitch'"), ("source_url", "TEXT"),
                          ("job_id", "INTEGER"), ("why", "TEXT"), ("layout", "TEXT"), ("facecam", "TEXT"), ("context", "TEXT"),
-                         ("ai_score", "REAL"), ("ai_review", "TEXT"), ("ai_tries", "INTEGER NOT NULL DEFAULT 0")]:
+                         ("ai_score", "REAL"), ("ai_review", "TEXT"), ("ai_tries", "INTEGER NOT NULL DEFAULT 0"),
+                         ("brand", "INTEGER NOT NULL DEFAULT 1")]:
             if col not in have:
                 self.x(f"ALTER TABLE clips ADD COLUMN {col} {ddl}")
 
@@ -131,7 +148,41 @@ class DB:
         cfg = ClipConfig.from_settings(self.settings())
         if channel:
             cfg.facecam = self.get(f"facecam:{channel}")
+            ch = self.channel(channel)
+            if not cfg.language and ch:  # the brand's language beats auto-detect
+                cfg.language = self.brand(ch.get("brand") or 1).get("language") or None
+            cfg.credit, cfg.handle = self.overlay(channel, (ch or {}).get("brand") or 1)
         return cfg
+
+    def overlay(self, channel: str, brand: int, video_channel: str | None = None) -> tuple:
+        """(credit, handle) to burn into a clip: the streamer first, our page smaller.
+        video_channel: the uploader's name, for clips cut from imported videos."""
+        if not self.settings().get("credit_overlay", True):
+            return None, None
+        ch = self.channel(channel) if channel else None
+        if ch and (ch.get("platform") or "twitch") == "twitch":
+            credit = f"twitch.tv/{ch['name']}"
+        elif ch:
+            credit = f"YouTube: {ch.get('label') or ch['name'].removeprefix('yt-')}"
+        else:
+            credit = f"YouTube: {video_channel or channel}" if (video_channel or channel) else None
+        if credit and credit.endswith(("Upload", ": Video")):  # uploads with no real channel name
+            credit = None
+        handle = (self.brand(brand).get("handle") or "").strip() or None
+        if handle and not handle.startswith("@"):
+            handle = "@" + handle
+        return credit, handle
+
+    # brands: one set of posting accounts each (e.g. German and Indonesian clip pages)
+    def brands(self) -> list[dict]:
+        return self.q("SELECT * FROM brands ORDER BY id")
+
+    def brand(self, bid: int) -> dict:
+        r = self.q("SELECT * FROM brands WHERE id=?", (bid,))
+        return r[0] if r else self.q("SELECT * FROM brands WHERE id=1")[0]
+
+    def caption_template(self, bid: int) -> str:
+        return self.brand(bid).get("caption_template") or self.settings()["caption_template"]
 
     def settings(self) -> dict:
         return {k: self.get(f"setting:{k}", v) for k, v in DEFAULT_SETTINGS.items()}
@@ -152,9 +203,9 @@ class DB:
         return self.q("SELECT * FROM channels ORDER BY added")
 
     def add_channel(self, name: str, platform: str = "twitch", url: str | None = None,
-                    label: str | None = None) -> None:
-        self.x("INSERT OR IGNORE INTO channels(name, added, platform, url, label) VALUES(?,?,?,?,?)",
-               (name, time.time(), platform, url, label))
+                    label: str | None = None, brand: int = 1) -> None:
+        self.x("INSERT OR IGNORE INTO channels(name, added, platform, url, label, brand) VALUES(?,?,?,?,?,?)",
+               (name, time.time(), platform, url, label, brand))
 
     def channel(self, name: str) -> dict | None:
         r = self.q("SELECT * FROM channels WHERE name=?", (name,))
@@ -165,11 +216,12 @@ class DB:
         return self.x(
             """INSERT INTO clips(channel, created, file, src, captions, thumb, duration, score, baseline,
                reason, chat_sample, heat, transcript, title, caption, source_kind, source_url, job_id, why,
-               layout, trim_start, trim_end, facecam, context)
+               layout, trim_start, trim_end, facecam, context, brand)
                VALUES(:channel,:created,:file,:src,:captions,:thumb,:duration,:score,:baseline,:reason,
                :chat_sample,:heat,:transcript,:title,:caption,:source_kind,:source_url,:job_id,:why,
-               :layout,:trim_start,:trim_end,:facecam,:context)""",
+               :layout,:trim_start,:trim_end,:facecam,:context,:brand)""",
             {"source_kind": "twitch", "source_url": None, "job_id": None, "why": None, "layout": None, "context": None,
+             "brand": 1,
              "trim_start": 0.0, "trim_end": None, **c, "chat_sample": json.dumps(c.get("chat_sample", []), ensure_ascii=False),
              "captions": json.dumps(c.get("captions", []), ensure_ascii=False),
              "heat": json.dumps(c.get("heat")),

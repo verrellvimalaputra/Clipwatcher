@@ -126,6 +126,8 @@ def create_app(data: Path) -> FastAPI:
         return {"channels": chans, "totals": totals, "posting": posting, "failed_posts": failed,
                 "importing": importing, "rerendering": rer,
                 "platforms": [p.info() for p in platforms(db).values()],
+                "brands": [{**b, "platforms": [p.info() for p in platforms(db, b["id"]).values()]}
+                           for b in db.brands()],
                 "claude": claude_available(), "claude_status": CLAUDE_STATUS,
                 "demo": os.environ.get("CLIPWATCHER_DEMO") == "1"}
 
@@ -136,7 +138,7 @@ def create_app(data: Path) -> FastAPI:
             ch = parse_channel(str(body.get("name", "")))
         except ValueError as e:
             raise HTTPException(400, str(e))
-        db.add_channel(ch["name"], ch["platform"], ch["url"], ch["label"])
+        db.add_channel(ch["name"], ch["platform"], ch["url"], ch["label"], valid_brand(body.get("brand")))
         sup.sync()
         return {"ok": True, **ch}
 
@@ -144,11 +146,62 @@ def create_app(data: Path) -> FastAPI:
     def edit_channel(name: str, body: dict = Body(...)):
         if "enabled" in body:
             db.x("UPDATE channels SET enabled=? WHERE name=?", (1 if body["enabled"] else 0, name))
+        if "brand" in body:  # new clips go to the new brand; clips already made keep theirs
+            db.x("UPDATE channels SET brand=? WHERE name=?", (valid_brand(body["brand"]), name))
         for k in ("ratio", "min_score"):
             if k in body:
                 v = body[k]
                 db.x(f"UPDATE channels SET {k}=? WHERE name=?", (float(v) if v not in (None, "") else None, name))
         sup.sync()
+        return {"ok": True}
+
+    # ---------------------------------------------------------------- brands
+    def valid_brand(v) -> int:
+        try:
+            bid = int(v or 1)
+        except (TypeError, ValueError):
+            bid = 1
+        return bid if db.q("SELECT id FROM brands WHERE id=?", (bid,)) else 1
+
+    def brand_body(body: dict) -> dict:
+        out = {}
+        if "name" in body:
+            out["name"] = str(body["name"]).strip()[:40] or "Brand"
+        if "language" in body:
+            out["language"] = str(body["language"] or "").strip()[:8]
+        if "caption_template" in body:
+            out["caption_template"] = str(body["caption_template"] or "").strip() or None
+        if "handle" in body:
+            h = re.sub(r"[^A-Za-z0-9._]", "", str(body["handle"] or ""))[:30]
+            out["handle"] = ("@" + h) if h else ""
+        return out
+
+    @app.post("/api/brands")
+    def add_brand(body: dict = Body(...)):
+        b = {"name": "New brand", "language": "", "caption_template": None, "handle": "", **brand_body(body)}
+        bid = db.x("INSERT INTO brands(name, language, caption_template, handle) VALUES(?,?,?,?)",
+                   (b["name"], b["language"], b["caption_template"], b["handle"]))
+        return db.brand(bid)
+
+    @app.patch("/api/brands/{bid}")
+    def edit_brand(bid: int, body: dict = Body(...)):
+        if not db.q("SELECT id FROM brands WHERE id=?", (bid,)):
+            raise HTTPException(404, "brand not found")
+        for k, v in brand_body(body).items():
+            db.x(f"UPDATE brands SET {k}=? WHERE id=?", (v, bid))
+        return db.brand(bid)
+
+    @app.delete("/api/brands/{bid}")
+    def delete_brand(bid: int):
+        if bid == 1:
+            raise HTTPException(400, "The first brand can't be deleted")
+        used = db.q("SELECT COUNT(*) n FROM channels WHERE brand=?", (bid,))[0]["n"]
+        if used:
+            raise HTTPException(400, f"{used} streamer(s) still post to this brand. Move them first")
+        for p in platforms(db, bid).values():
+            p.disconnect()
+        db.x("UPDATE clips SET brand=1 WHERE brand=? AND status!='approved'", (bid,))
+        db.x("DELETE FROM brands WHERE id=?", (bid,))
         return {"ok": True}
 
     @app.delete("/api/channels/{name}/facecam")
@@ -164,11 +217,15 @@ def create_app(data: Path) -> FastAPI:
 
     # ---------------------------------------------------------------- clips
     @app.get("/api/clips")
-    def list_clips(status: str = "pending", channel: str = "", job: int = 0, limit: int = 200, sort: str = "new"):
+    def list_clips(status: str = "pending", channel: str = "", job: int = 0, limit: int = 200, sort: str = "new",
+                   brand: int = 0):
         reviewer.poke()  # new clips get their AI score soon after the queue is looked at
         sql = ("SELECT id, channel, created, file, thumb, duration, score, baseline, reason, title, status, "
-               "source_kind, job_id, ai_score FROM clips WHERE status=?")
+               "source_kind, job_id, ai_score, brand FROM clips WHERE status=?")
         args: list = [status]
+        if brand:
+            sql += " AND brand=?"
+            args.append(brand)
         if channel:
             sql += " AND channel=? AND source_kind!='video'"
             args.append(channel)
@@ -195,12 +252,19 @@ def create_app(data: Path) -> FastAPI:
         for k in ("title", "caption"):
             if k in body:
                 db.x(f"UPDATE clips SET {k}=? WHERE id=?", (str(body[k]), cid))
+        if "brand" in body:
+            db.x("UPDATE clips SET brand=? WHERE id=?", (valid_brand(body["brand"]), cid))
         return get_clip(cid)
 
     @app.post("/api/clips/{cid}/approve")
     def approve(cid: int, body: dict = Body(...)):
         c = get_clip(cid)
         plats = [p for p in body.get("platforms", []) if p in ("youtube", "instagram", "tiktok")]
+        connected = {n for n, p in platforms(db, c.get("brand") or 1).items() if p.info()["connected"]}
+        missing = [p for p in plats if p not in connected]
+        if missing:
+            raise HTTPException(400, f"{db.brand(c.get('brand') or 1)['name']} has no {', '.join(missing)} account "
+                                     "connected. Connect it in Settings")
         if "title" in body:
             db.x("UPDATE clips SET title=?, caption=? WHERE id=?",
                  (body["title"], body.get("caption", c["caption"]), cid))
@@ -255,6 +319,12 @@ def create_app(data: Path) -> FastAPI:
         # facecam: explicit box > this clip's box > the channel's saved box > detect again
         cfg.facecam = None if redetect else (facecam or c.get("facecam") or c.get("channel_facecam"))
         cfg.context = (c.get("context") or None) if db.settings().get("context_overlay", True) else None
+        if c.get("source_kind") == "video":
+            cfg.credit, cfg.handle = db.overlay("", c.get("brand") or 1, c["channel"] if c.get("source_url") else None)
+            if not c.get("source_url"):
+                cfg.credit = None
+        else:
+            cfg.credit, cfg.handle = db.overlay(c["channel"], c.get("brand") or 1)
         new_name = f"{Path(c['file']).stem.split('.v')[0]}.v{int(time.time())}.mp4"
         used = render(clips_dir / c["src"], clips_dir / new_name, cfg, c["captions"], start, end)
         thumbnail(clips_dir / new_name, clips_dir / c["thumb"])
@@ -402,7 +472,7 @@ def create_app(data: Path) -> FastAPI:
     @app.post("/api/clips/{cid}/caption-template")
     def caption_from_template(cid: int, body: dict = Body(...)):
         c = get_clip(cid)
-        return {"caption": render_caption(db.settings()["caption_template"], body.get("title", c["title"]),
+        return {"caption": render_caption(db.caption_template(c.get("brand") or 1), body.get("title", c["title"]),
                                           c["channel"], c.get("source_url"))}
 
     # ---------------------------------------------------------------- imports
@@ -412,7 +482,8 @@ def create_app(data: Path) -> FastAPI:
                 "layout": body.get("layout") if body.get("layout") in ("split", "auto", "fit", "crop", "original") else None,
                 "language": str(body.get("language") or "").strip()[:8] or None,
                 "ai": bool(body.get("ai", True)), "chat": bool(body.get("chat", True)),
-                "download": body.get("download") if body.get("download") in ("auto", "full", "clips") else "auto"}
+                "download": body.get("download") if body.get("download") in ("auto", "full", "clips") else "auto",
+                "brand": valid_brand(body.get("brand"))}
 
     @app.get("/api/imports")
     def list_imports():
@@ -492,8 +563,8 @@ def create_app(data: Path) -> FastAPI:
         return {"ok": True}
 
     @app.post("/api/platforms/{name}/disconnect")
-    def disconnect(name: str):
-        platforms(db)[name].disconnect()
+    def disconnect(name: str, brand: int = 1):
+        platforms(db, valid_brand(brand))[name].disconnect()
         return {"ok": True}
 
     @app.get("/api/platforms/{name}/redirect-uri")
@@ -501,12 +572,13 @@ def create_app(data: Path) -> FastAPI:
         return {"redirect_uri": platforms(db)[name].redirect_uri(base_url(request))}
 
     @app.get("/auth/{name}/start")
-    def auth_start(name: str, request: Request):
-        p = platforms(db).get(name)
+    def auth_start(name: str, request: Request, brand: int = 1):
+        bid = valid_brand(brand)
+        p = platforms(db, bid).get(name)
         if not p or not p.info()["configured"]:
             raise HTTPException(400, "Save the app's client ID and secret first")
         state = new_state()
-        db.put(f"oauth_state:{state}", {"platform": name, "t": time.time()})
+        db.put(f"oauth_state:{state}", {"platform": name, "brand": bid, "t": time.time()})
         return RedirectResponse(p.auth_url(base_url(request), state))
 
     @app.get("/auth/{name}/callback")
@@ -519,7 +591,7 @@ def create_app(data: Path) -> FastAPI:
         if not saved or saved["platform"] != name or time.time() - saved["t"] > 900:
             return RedirectResponse("/#settings?error=login expired, try again")
         try:
-            platforms(db)[name].exchange(base_url(request), code)
+            platforms(db, valid_brand(saved.get("brand")))[name].exchange(base_url(request), code)
         except Exception as e:
             log.warning("oauth %s failed: %s", name, e)
             return RedirectResponse(f"/#settings?error={str(e)[:200]}")

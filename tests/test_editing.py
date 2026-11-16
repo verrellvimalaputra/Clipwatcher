@@ -74,3 +74,16 @@ def test_context_banner_only_at_the_start(tmp_path):
     assert n == 1
     assert "Style: Context" in text
     assert "Dialogue: 1,0:00:00.00,0:00:03.50,Context" in text and "Mande thinks he already won" in text
+
+
+def test_credit_and_handle_follow_the_context_line(tmp_path):
+    from clipwatcher.editing import write_ass
+    p = tmp_path / "c.ass"
+    write_ass([], p, offset=0, width=1080, height=1920, end=20, context="Er klaut das Auto",
+              credit="twitch.tv/papaplatte", handle="@streamweltclips")
+    credit = [ln for ln in p.read_text().splitlines() if ",Credit," in ln and ln.startswith("Dialogue")][0]
+    assert credit.startswith("Dialogue: 2,0:00:03.50,0:00:20.00,Credit")   # after the hook seconds
+    assert "twitch.tv/papaplatte\\N" in credit and "@streamweltclips" in credit
+    write_ass([], p, offset=0, width=1080, height=1920, end=20, credit="twitch.tv/x")
+    credit = [ln for ln in p.read_text().splitlines() if ",Credit," in ln and ln.startswith("Dialogue")][0]
+    assert credit.startswith("Dialogue: 2,0:00:00.00,") and "\\N" not in credit  # no context, no handle

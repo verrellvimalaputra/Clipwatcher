@@ -2,8 +2,9 @@
 
 Each platform: OAuth connect (auth_url -> exchange), token refresh, publish().
 App credentials (client id/secret) and tokens live in the DB kv table:
-  cred:<platform>  = {"client_id": ..., "client_secret": ...}
-  token:<platform> = {"access_token", "refresh_token", "expires_at", "account", ...}
+  cred:<platform>  = {"client_id": ..., "client_secret": ...}   (one developer app, shared by all brands)
+  token:<platform> = {"access_token", "refresh_token", "expires_at", "account", ...}   (brand 1)
+  token:<platform>@<brand> = the same for another brand (its own YouTube/Instagram/TikTok account)
 
 Platform rules to know (they're enforced by the platforms, not by this code):
   * YouTube: Google Cloud projects that haven't passed the YouTube API audit may
@@ -55,8 +56,12 @@ class Platform:
     label = ""
     setup_url = ""
 
-    def __init__(self, db: DB):
-        self.db = db
+    def __init__(self, db: DB, brand: int = 1):
+        self.db, self.brand = db, int(brand or 1)
+
+    @property
+    def _tkey(self) -> str:
+        return f"token:{self.name}" if self.brand == 1 else f"token:{self.name}@{self.brand}"
 
     # creds / tokens
     @property
@@ -65,13 +70,13 @@ class Platform:
 
     @property
     def token(self) -> dict | None:
-        return self.db.get(f"token:{self.name}")
+        return self.db.get(self._tkey)
 
     def save_token(self, tok: dict):
-        self.db.put(f"token:{self.name}", tok)
+        self.db.put(self._tkey, tok)
 
     def disconnect(self):
-        self.db.delete(f"token:{self.name}")
+        self.db.delete(self._tkey)
 
     def info(self) -> dict:
         t = self.token or {}
@@ -109,7 +114,7 @@ class YouTube(Platform):
         return "https://accounts.google.com/o/oauth2/v2/auth?" + urlencode({
             "client_id": self.cred["client_id"], "redirect_uri": self.redirect_uri(base),
             "response_type": "code", "scope": self.SCOPES, "access_type": "offline",
-            "prompt": "consent", "state": state})
+            "prompt": "consent select_account", "state": state})
 
     def _token_req(self, data):
         body = _check(HTTP.post("https://oauth2.googleapis.com/token", data={
@@ -169,7 +174,7 @@ class Instagram(Platform):
         return "https://www.instagram.com/oauth/authorize?" + urlencode({
             "client_id": self.cred["client_id"], "redirect_uri": self.redirect_uri(base),
             "response_type": "code", "state": state,
-            "scope": "instagram_business_basic,instagram_business_content_publish"})
+            "scope": "instagram_business_basic,instagram_business_content_publish", "force_reauth": "true"})
 
     def exchange(self, base, code):
         short = _check(HTTP.post("https://api.instagram.com/oauth/access_token", data={
@@ -238,7 +243,7 @@ class TikTok(Platform):
             scopes += ",video.publish"
         return "https://www.tiktok.com/v2/auth/authorize/?" + urlencode({
             "client_key": self.cred["client_id"], "redirect_uri": self.redirect_uri(base),
-            "response_type": "code", "scope": scopes, "state": state})
+            "response_type": "code", "scope": scopes, "state": state, "disable_auto_auth": "1"})
 
     def _token_req(self, data):
         body = _check(HTTP.post(f"{self.API}/oauth/token/", data={
@@ -326,19 +331,20 @@ class Fake(Platform):
     """CLIPWATCHER_DEMO=1: pretend to post, so you can try the whole flow safely."""
 
     def __init__(self, db, real: Platform):
-        super().__init__(db)
+        super().__init__(db, real.brand)
         self.name, self.label, self.setup_url = real.name, real.label, real.setup_url
 
     def info(self):
-        return {**super().info(), "configured": True, "connected": True, "account": "demo account", "demo": True}
+        return {**super().info(), "configured": True, "connected": True, "account": f"demo account {self.brand}",
+                "demo": True}
 
     def publish(self, video, clip, settings, public_video_url):
         time.sleep(3)
         return {"remote_id": f"demo-{clip['id']}", "url": None, "note": "Demo mode: nothing was actually posted"}
 
 
-def platforms(db: DB) -> dict[str, Platform]:
-    real = {p.name: p for p in (YouTube(db), Instagram(db), TikTok(db))}
+def platforms(db: DB, brand: int = 1) -> dict[str, Platform]:
+    real = {p.name: p for p in (YouTube(db, brand), Instagram(db, brand), TikTok(db, brand))}
     if os.environ.get("CLIPWATCHER_DEMO") == "1":
         return {n: Fake(db, p) for n, p in real.items()}
     return real
@@ -379,7 +385,7 @@ class PostWorker(threading.Thread):
         db.x("UPDATE posts SET status='uploading', error=NULL, updated=? WHERE id=?", (time.time(), post["id"]))
         clip = db.clip(post["clip_id"])
         try:
-            plat = platforms(db)[post["platform"]]
+            plat = platforms(db, clip.get("brand") or 1)[post["platform"]]
             video = self.clips_dir / clip["file"]
             base = self.public_base()
             pub_url = f"{base}/public/{public_token(self.secret, clip['file'])}/{clip['file']}" if base else None

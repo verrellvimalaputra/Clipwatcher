@@ -129,3 +129,43 @@ no spoilers, no lies. The owner found the old output stiff ("kaku").
 - Focus market: German-language GTA 6 streamers (higher RPM, owner lives in DE);
   Indonesian is secondary. Keep examples for both.
 - Test: `tests/test_moments.py::test_text_prompts_include_the_style_guide`.
+
+## Brands (several sets of posting accounts)
+
+The owner runs two clip pages: German GTA 6 clips (main, brand 1) and Indonesian
+clips. A **brand** = one YouTube channel + one Instagram + one TikTok.
+
+- Table `brands(id, name, language, caption_template)`. Brand 1 always exists
+  ("Main", created by `_migrate`) and can't be deleted; old DBs land there.
+- `channels.brand`, `jobs.brand`, `clips.brand` (default 1). A clip takes its
+  brand from its channel (`Supervisor._on_clip`) or import job; changing a
+  channel's brand only affects new clips. A clip can be moved (`PATCH /api/clips/{id}`).
+- Developer apps (`cred:<platform>`) are shared by all brands. Logins are per
+  brand: `token:<platform>` for brand 1 (unchanged key), `token:<platform>@<id>`
+  for others. `platforms(db, brand)` returns platform objects bound to a brand;
+  `PostWorker` uses the clip's brand.
+- OAuth: `/auth/<p>/start?brand=<id>` stores the brand in the state; the
+  callback saves the token to that brand. Login URLs force an account picker
+  (Google `prompt=consent select_account`, Instagram `force_reauth`, TikTok
+  `disable_auto_auth`) so a second account can be connected.
+- Brand language is the Whisper default for its channels/imports when the global
+  setting is "detect"; brand caption template overrides the global one.
+- Approve refuses platforms the clip's brand hasn't connected.
+- Tests: `tests/test_brands.py`.
+
+## Credit and handle on the video
+
+Every clip shows who made the content, and our page smaller (the owner wants it
+fair: the streamer's credit must always be the bigger, clearer line).
+
+- `ClipConfig.credit` / `.handle` -> `write_ass(credit=, handle=)`: ASS style
+  `Credit`, top centre at the context banner's spot. It starts when the context
+  line ends (the first ~3.5 s are the hook), fades in, stays to the end. Line 1 =
+  credit, line 2 (smaller, more transparent) = handle.
+- `DB.overlay(channel, brand, video_channel)` builds them: Twitch ->
+  `twitch.tv/<name>`, YouTube live -> `YouTube: <label>`, imported video ->
+  `YouTube: <uploader>`, uploads -> no credit. Handle = `brands.handle` (with @).
+  Setting `credit_overlay` turns both off.
+- Set in `DB.clip_config` (live), `ImportWorker._run_job` (imports) and
+  `do_render` (re-renders), so all three paths match.
+- Never put another platform's logo on clips (Reels/TikTok demote those).

@@ -31,6 +31,8 @@ class ClipConfig:
     facecam: dict | None = None   # split layout: {"x","y","w","h"} 0..1 of the source frame; None = auto-detect
     context: str | None = None    # one line that sets up the situation, shown at the top for the first seconds
     context_secs: float = 3.5
+    credit: str | None = None     # who made the content, on screen the whole clip (e.g. "twitch.tv/papaplatte")
+    handle: str | None = None     # our own page, smaller, under the credit (e.g. "@streamweltclips")
 
     @classmethod
     def from_settings(cls, s: dict) -> "ClipConfig":
@@ -150,7 +152,8 @@ CONTEXT_INK = "&H00041D2A&"   # #2a1d04 text on the amber "tally" box
 
 
 def write_ass(lines: list, path: Path, offset: float, width: int, height: int, end: float | None = None,
-              center_y: float | None = None, context: str | None = None, context_secs: float = 3.5) -> int:
+              center_y: float | None = None, context: str | None = None, context_secs: float = 3.5,
+              credit: str | None = None, handle: str | None = None) -> int:
     """Short-form style captions: big bold lines, the word being spoken in amber.
     `lines` items are [start, end, text] or [start, end, text, words]; times are
     relative to the source and shifted by -offset."""
@@ -172,6 +175,11 @@ def write_ass(lines: list, path: Path, offset: float, width: int, height: int, e
         f"Style: Context,DejaVu Sans,{round(height * (0.029 if vertical else 0.045))},{CONTEXT_INK},{CONTEXT_INK},"
         f"{HIGHLIGHT},&H00000000,-1,0,0,0,100,100,0,0,3,{max(8, round(height * 0.009))},0,8,"
         f"{width // 10},{width // 10},{round(height * (0.055 if vertical else 0.06))},1",
+        # credit + our handle: small, top centre (where the context banner was), clear of the
+        # platforms' right-hand buttons; the streamer's name is the bigger line
+        f"Style: Credit,DejaVu Sans,{round(height * (0.021 if vertical else 0.032))},&H10FFFFFF,&H10FFFFFF,"
+        f"&H80000000,&H00000000,-1,0,0,0,100,100,0,0,1,{max(2, round(height * 0.0015))},0,8,"
+        f"{width // 10},{width // 10},{round(height * (0.06 if vertical else 0.03))},1",
         "", "[Events]", "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
     ]
     n = 0
@@ -187,6 +195,18 @@ def write_ass(lines: list, path: Path, offset: float, width: int, height: int, e
         out.append(f"Dialogue: 0,{_ass_time(a)},{_ass_time(b)},Cap,,0,0,0,,{text}")
         n += 1
 
+    if (credit and credit.strip()) or (handle and handle.strip()):
+        small = round(height * (0.016 if vertical else 0.024))
+        parts = [_ass_escape(credit.strip())[:60]] if credit and credit.strip() else []
+        if handle and handle.strip():
+            parts.append(f"{{\\fs{small}\\b0\\alpha&H70&}}{_ass_escape(handle.strip())[:40]}")
+        until = clip_end if clip_end is not None else 36000
+        # the hook seconds belong to the context line: the credit takes its place right after
+        since = min(context_secs, max(until - 1.0, 0)) if context and context.strip() else 0
+        text = "\\N".join(parts)  # \N = line break in ASS
+        out.append(f"Dialogue: 2,{_ass_time(since)},{_ass_time(max(until, since + 0.5))},Credit,,0,0,0,,"
+                   f"{{\\fad(250,0)}}{text}")
+        n += 1
     if context and context.strip():
         dur = context_secs if clip_end is None else min(context_secs, max(clip_end, 0.5))
         out.append(f"Dialogue: 1,{_ass_time(0)},{_ass_time(dur)},Context,,0,0,0,,"
@@ -547,9 +567,9 @@ def render(src: Path, out_mp4: Path, cfg: ClipConfig, captions: list | None,
             base = "[0:v]null[base]"
         ow, oh = (1080, 1920) if layout in ("split", "auto", "fit", "crop") else (iw, ih)
         graph = base
-        if (captions or cfg.context) and write_ass(captions or [], tdp / "c.ass", offset=start, width=ow, height=oh,
-                                                   end=end, center_y=cap_y, context=cfg.context,
-                                                   context_secs=cfg.context_secs):
+        if (captions or cfg.context or cfg.credit or cfg.handle) and write_ass(
+                captions or [], tdp / "c.ass", offset=start, width=ow, height=oh, end=end, center_y=cap_y,
+                context=cfg.context, context_secs=cfg.context_secs, credit=cfg.credit, handle=cfg.handle):
             graph += ";[base]subtitles=c.ass[v]"
         else:
             graph += ";[base]null[v]"

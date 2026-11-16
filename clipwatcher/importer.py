@@ -45,16 +45,17 @@ class ImportWorker(threading.Thread):
 
     # ------------------------------------------------------------ public
     def add_url(self, url: str, options: dict) -> int:
-        jid = self.db.x("INSERT INTO jobs(kind, url, title, status, step, options, created, updated) "
-                        "VALUES('url', ?, ?, 'queued', 'Waiting', ?, ?, ?)",
-                        (url, url, json.dumps(options), time.time(), time.time()))
+        jid = self.db.x("INSERT INTO jobs(kind, url, title, status, step, options, created, updated, brand) "
+                        "VALUES('url', ?, ?, 'queued', 'Waiting', ?, ?, ?, ?)",
+                        (url, url, json.dumps(options), time.time(), time.time(), int(options.get("brand") or 1)))
         self.wake.set()
         return jid
 
     def add_upload(self, filename: str, options: dict) -> tuple[int, Path]:
-        jid = self.db.x("INSERT INTO jobs(kind, title, channel, status, step, options, created, updated) "
-                        "VALUES('upload', ?, 'Upload', 'uploading', 'Uploading', ?, ?, ?)",
-                        (Path(filename).stem, json.dumps(options), time.time(), time.time()))
+        jid = self.db.x("INSERT INTO jobs(kind, title, channel, status, step, options, created, updated, brand) "
+                        "VALUES('upload', ?, 'Upload', 'uploading', 'Uploading', ?, ?, ?, ?)",
+                        (Path(filename).stem, json.dumps(options), time.time(), time.time(),
+                         int(options.get("brand") or 1)))
         d = self.imports / str(jid)
         d.mkdir(parents=True, exist_ok=True)
         ext = Path(filename).suffix.lower() if Path(filename).suffix.lower() in VIDEO_EXT else ".mp4"
@@ -115,7 +116,12 @@ class ImportWorker(threading.Thread):
             # 1. transcribe (the slow part on CPU)
             s = self.db.settings()
             cfg = ClipConfig.from_settings(s)
-            cfg.language = opts.get("language") or cfg.language
+            cfg.language = (opts.get("language") or cfg.language
+                            or self.db.brand(job.get("brand") or 1).get("language") or None)
+            if job["kind"] == "url":
+                cfg.credit, cfg.handle = self.db.overlay("", job.get("brand") or 1, info.get("channel"))
+            else:  # an upload: we don't know whose video it is, so only our handle
+                cfg.handle = self.db.overlay("", job.get("brand") or 1)[1]
             # Finding moments only needs a rough transcript of the WHOLE video. YouTube's
             # own captions give one in seconds; otherwise a fast Whisper model. The
             # accurate captions are made later, per clip (see _clip_captions).
@@ -399,7 +405,6 @@ class ImportWorker(threading.Thread):
         link = info.get("webpage_url") or job.get("url") or ""  # "" for uploads
         if link and m.start > 5 and "youtu" in link:
             link += ("&" if "?" in link else "?") + f"t={int(m.start)}"
-        s = self.db.settings()
         channel = info.get("channel") or "Video"
         self.db.add_clip({
             "channel": channel, "created": time.time(), "file": out.name, "src": src.name,
@@ -409,10 +414,10 @@ class ImportWorker(threading.Thread):
             "transcript": " ".join(ln[2] for ln in captions if m.start - a <= ln[0] < m.end - a)
             or " ".join(w[2] for w in words if m.start <= w[0] < m.end),
             "title": m.title or info.get("title", "")[:70],
-            "caption": render_caption(s["caption_template"], m.title, channel, link),
+            "caption": render_caption(self.db.caption_template(job.get("brand") or 1), m.title, channel, link),
             "source_kind": "video", "source_url": link or None, "job_id": job["id"], "why": m.why,
             "layout": used, "trim_start": round(ts, 3), "trim_end": round(te, 3), "facecam": c.facecam,
-            "context": m.context or None,
+            "context": m.context or None, "brand": job.get("brand") or 1,
         })
 
     def _cleanup(self, work: Path, media: Path | None):

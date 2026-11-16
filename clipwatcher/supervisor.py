@@ -139,15 +139,15 @@ class Supervisor:
         self.stop = threading.Event()
 
     def _on_clip(self, meta: dict):
-        s = self.db.settings()
         when = time.strftime("%d %b", time.localtime(meta["created"]))
         ch = self.db.channel(meta["channel"])
         link = public_link(ch, meta["channel"])
         meta["source_kind"] = (ch or {}).get("platform") or "twitch"
         label = (ch or {}).get("label") or meta["channel"]
         title = meta.get("title") or f"{label} moment ({when})"
-        meta.update(title=title, caption=render_caption(s["caption_template"], title, label, link),
-                    source_url=link)
+        brand = (ch or {}).get("brand") or 1
+        meta.update(title=title, caption=render_caption(self.db.caption_template(brand), title, label, link),
+                    source_url=link, brand=brand)
         self.db.add_clip(meta)
 
     def sync(self):

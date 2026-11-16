@@ -75,6 +75,14 @@ Settings → Claude Code shows how many calls and tokens the studio used today.
 Sort the queue by **Best AI score first**. Trimming a clip
 scores it again. Turn it off in Settings → Clips.
 
+## Brands: several sets of accounts
+
+Settings -> Brands and accounts. A brand is one YouTube channel, one Instagram
+and one TikTok (e.g. "GTA 6 Clips DE" and "GTA 6 Clips ID"). Each streamer and
+each import posts to one brand; pick it when adding a streamer ("Add to"), in a
+streamer's Edit menu, or on the Import page. The developer apps are shared; only
+the logins differ. Each brand can have its own speech language and caption.
+
 ## Importing videos
 
 Open **Import a video**, paste a link, pick clip length / count / layout and
