@@ -49,3 +49,40 @@ def test_write_survives_a_transient_io_error(tmp_path):
     f.close()
     assert Flaky.calls == 1
     assert sess.path.read_bytes() == good + b"B" * 188
+
+
+def test_fragmented_mp4_slices_play(tmp_path):
+    """Twitch serves some channels as fMP4: a slice must start on a fragment and get the init segment."""
+    import shutil
+    import subprocess
+
+    import pytest
+
+    from clipwatcher.recorder import BoxScanner
+
+    if not shutil.which("ffmpeg"):
+        pytest.skip("needs ffmpeg")
+    src = tmp_path / "live.mp4"
+    subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i", "testsrc=size=320x180:rate=30:duration=10",
+                    "-c:v", "libx264", "-g", "30", "-movflags", "frag_keyframe+empty_moov+default_base_moof",
+                    "-f", "mp4", str(src)], check=True)
+    data = src.read_bytes()
+    assert data[4:8] == b"ftyp"
+    # replay it as streamlink would deliver it: odd-sized chunks, 10 s of wall clock
+    sess, scan = Session(tmp_path / "rec.ts", fmp4=True), BoxScanner()
+    step = 4099
+    with open(sess.path, "wb") as f:
+        for i in range(0, len(data), step):
+            chunk = data[i:i + step]
+            f.write(chunk)
+            sess.add(1000 + 10 * i / len(data), len(chunk), scan.feed(chunk))
+    assert not scan.broken and sess.inits and len(sess.offsets) >= 9
+    out = tmp_path / "slice.src.ts"
+    assert sess.extract(1004.0, 1007.0, out) > 0
+    probe = subprocess.run(["ffprobe", "-v", "error", "-count_frames", "-select_streams", "v:0",
+                            "-show_entries", "stream=nb_read_frames", "-of", "csv=p=0", str(out)],
+                           capture_output=True, text=True)
+    assert probe.returncode == 0, probe.stderr
+    assert 60 <= int(probe.stdout.split()[0]) <= 150   # ~3-4 s of 30 fps, decodable from the first frame
+    from clipwatcher.editing import duration_of
+    assert 2 <= duration_of(out) <= 5               # the slice's own length, not "from timestamp 0"
