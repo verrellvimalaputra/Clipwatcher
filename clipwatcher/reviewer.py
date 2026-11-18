@@ -64,7 +64,7 @@ def review_input(c: dict) -> str:
     t1 = c.get("trim_end")
     t1 = float(t1) if t1 is not None else t0 + float(c.get("duration") or 60)
     lines = []
-    for a, b, txt in c.get("captions") or []:
+    for a, b, txt, *_ in c.get("captions") or []:  # live clips add per-word timings as a 4th item
         if b > t0 and a < t1 and str(txt).strip():
             lines.append(f"[{max(a - t0, 0):5.1f}] {str(txt).strip()}")
     chat = [m if isinstance(m, str) else (m.get("text") or m.get("msg") or str(m)) for m in (c.get("chat_sample") or [])][:40]

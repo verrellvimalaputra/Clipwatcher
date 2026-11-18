@@ -23,6 +23,9 @@ def test_input_only_has_the_final_cut(tmp_path):
     assert "[  1.0] Ich spring jetzt" in text      # times relative to the cut
     assert "[ 28.0] Nein!" in text                 # overlaps the end
     assert "Papaplatte will über die Brücke" in text and "- KEKW" in text
+    # live clips store captions with per-word timings as a 4th item
+    c["captions"] = [[c0[0], c0[1], c0[2], [[c0[0], c0[1], "w"]]] for c0 in c["captions"]]
+    assert reviewer.review_input(c) == text
 
 
 def test_parse_clamps_and_requires_score():
