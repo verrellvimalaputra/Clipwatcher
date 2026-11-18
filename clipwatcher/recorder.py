@@ -103,6 +103,9 @@ class Recorder(threading.Thread):
             self.proc = proc
             try:
                 self._record(proc)
+            except Exception:
+                # a dead recorder thread means silent "0 bytes" for every later spike: log and start over
+                log.exception("recording %s failed, restarting", self.channel)
             finally:
                 proc.kill()
                 proc.wait()
@@ -129,12 +132,46 @@ class Recorder(threading.Thread):
         with self.lock:
             self.sessions.append(sess)
         log.info("LIVE, recording to %s", path)
-        with open(path, "wb") as f:
+        f = open(path, "wb")
+        try:
             chunk = first
             while chunk and not self.stop.is_set():
-                f.write(chunk)
-                f.flush()
+                f = self._write(f, sess, chunk)
                 sess.add(time.time(), len(chunk))
                 chunk = proc.stdout.read(65536)
-        sess.ended = True
+        finally:
+            sess.ended = True
+            try:
+                f.close()
+            except OSError:
+                pass
         log.info("stream ended (%.1f MB recorded)", sess.size / 1e6)
+
+    @staticmethod
+    def _write(f, sess: Session, chunk: bytes, tries: int = 6):
+        """Write one chunk; on an I/O error reopen the file at the last good offset and retry.
+
+        Docker Desktop's Windows bind mount (9p) sometimes fails a write with EIO for a
+        moment. The index only counts bytes that were fully written, so rewriting
+        from sess.size keeps it exact.
+        """
+        for attempt in range(tries):
+            try:
+                f.write(chunk)
+                f.flush()
+                return f
+            except (OSError, ValueError) as e:  # ValueError: file still closed after a failed reopen
+                if attempt == tries - 1:
+                    raise
+                log.warning("write to %s failed (%s), retrying", sess.path.name, e)
+                time.sleep(min(2 ** attempt, 10))
+                try:
+                    f.close()
+                except OSError:
+                    pass
+                try:
+                    f = open(sess.path, "r+b")
+                    f.seek(sess.size)
+                except OSError:
+                    pass  # still failing; the next write raises and we retry again
+        return f

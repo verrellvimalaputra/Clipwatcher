@@ -222,10 +222,12 @@ class DB:
                :layout,:trim_start,:trim_end,:facecam,:context,:brand)""",
             {"source_kind": "twitch", "source_url": None, "job_id": None, "why": None, "layout": None, "context": None,
              "brand": 1,
-             "trim_start": 0.0, "trim_end": None, **c, "chat_sample": json.dumps(c.get("chat_sample", []), ensure_ascii=False),
-             "captions": json.dumps(c.get("captions", []), ensure_ascii=False),
-             "heat": json.dumps(c.get("heat")),
-             "facecam": json.dumps(c["facecam"]) if c.get("facecam") else None})
+             # default=float: numpy scalars (float32 from OpenCV/Whisper) must never lose a finished clip
+             "trim_start": 0.0, "trim_end": None, **c,
+             "chat_sample": json.dumps(c.get("chat_sample", []), ensure_ascii=False, default=float),
+             "captions": json.dumps(c.get("captions", []), ensure_ascii=False, default=float),
+             "heat": json.dumps(c.get("heat"), default=float),
+             "facecam": json.dumps(c["facecam"], default=float) if c.get("facecam") else None})
 
     def add_usage(self, task: str, out: dict):
         """Record one `claude -p --output-format json` result."""

@@ -542,6 +542,7 @@ def render(src: Path, out_mp4: Path, cfg: ClipConfig, captions: list | None,
         if layout == "split":
             box = cfg.facecam or (detect_facecam(src, start, end) if iw > ih else None)
             if box:
+                box = {k: round(float(v), 4) for k, v in box.items()}  # numpy float32 isn't JSON serializable
                 cfg.facecam = box  # callers store it, so re-renders and the editor start from it
                 fx, fy = int(box["x"] * iw), int(box["y"] * ih)
                 fw, fh = max(int(box["w"] * iw) // 2 * 2, 16), max(int(box["h"] * ih) // 2 * 2, 16)
